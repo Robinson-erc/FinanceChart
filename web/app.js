@@ -23,7 +23,7 @@ const state = {
   kind: "bills",             // which ledger tab
   view: "budget",
   editingId: null,
-  sort: { bills: "due_day", income: "pay_day" },
+  sort: { bills: "due_day", income: "schedule" },
   reverse: false,
   search: "",
   bills: [],
@@ -37,6 +37,7 @@ const SPEC = {
     noun: "bill",
     addLabel: "Add a bill",
     dayField: "due_day",
+    defaultSort: "due_day",
     columns: [
       { key: "name", label: "Bill", align: "l" },
       { key: "due_day", label: "Due", align: "c" },
@@ -54,17 +55,30 @@ const SPEC = {
     noun: "income source",
     addLabel: "Add income",
     dayField: "pay_day",
+    defaultSort: "schedule",
     columns: [
       { key: "name", label: "Source", align: "l" },
-      { key: "pay_day", label: "Paid", align: "c" },
-      { key: "amount", label: "Amount", align: "r" },
+      { key: "schedule", label: "Schedule", align: "l" },
+      { key: "amount", label: "Per month", align: "r" },
     ],
     fields: [
       { key: "name", label: "Source", type: "text" },
       { key: "amount", label: "Amount ($)", type: "text", inputmode: "decimal" },
-      { key: "pay_day", label: "Paid on", type: "number", default: "1" },
+      {
+        key: "frequency", label: "How often", type: "select",
+        options: db.FREQUENCIES.map((f) => f.key),
+        optionLabels: db.FREQUENCIES.map((f) => f.label),
+        default: "monthly",
+      },
+      // Which of these applies depends on the frequency; the rest are hidden.
+      { key: "pay_day", label: "Paid on", type: "number", default: "1",
+        showFor: ["monthly", "semimonthly"] },
+      { key: "pay_day_2", label: "And on", type: "number", default: "15",
+        showFor: ["semimonthly"] },
+      { key: "anchor_date", label: "Last paid", type: "date",
+        showFor: ["biweekly", "weekly"] },
     ],
-    searchText: (r) => `${r.name} ${db.ordinal(r.pay_day)}`,
+    searchText: (r) => `${r.name} ${db.describeSchedule(r)}`,
   },
 };
 
@@ -120,6 +134,25 @@ function setTheme(mode) {
 
 let authMode = "signin";
 
+/** Supabase's auth errors are terse; the common ones deserve an explanation. */
+function friendlyAuthError(message) {
+  const text = String(message || "");
+  if (/rate limit/i.test(text)) {
+    return "Too many confirmation emails just now. Wait an hour, or ask the " +
+           "owner to switch email confirmation off.";
+  }
+  if (/email not confirmed/i.test(text)) {
+    return "Check your inbox and confirm your address before signing in.";
+  }
+  if (/invalid login credentials/i.test(text)) {
+    return "That email and password do not match an account.";
+  }
+  if (/already registered|user already/i.test(text)) {
+    return "That email already has an account — try signing in instead.";
+  }
+  return text;
+}
+
 function renderAuthMode() {
   const signup = authMode === "signup";
   $("auth-title").textContent = signup ? "Create your account" : "Welcome back";
@@ -162,7 +195,7 @@ function wireAuth() {
       }
       await start();
     } catch (error) {
-      $("auth-error").textContent = error.message;
+      $("auth-error").textContent = friendlyAuthError(error.message);
     } finally {
       button.disabled = false;
     }
@@ -178,7 +211,7 @@ function wireAuth() {
       await db.sendPasswordReset(email);
       toast("Check your email", "We sent a link to reset your password.", "good");
     } catch (error) {
-      $("auth-error").textContent = error.message;
+      $("auth-error").textContent = friendlyAuthError(error.message);
     }
   };
 }
@@ -193,6 +226,7 @@ function renderEditorFields() {
   for (const field of spec.fields) {
     const label = document.createElement("label");
     label.className = "field";
+    label.id = `wrap-${field.key}`;
     const caption = document.createElement("span");
     caption.textContent = field.label;
     label.append(caption);
@@ -200,20 +234,44 @@ function renderEditorFields() {
     let input;
     if (field.type === "select") {
       input = document.createElement("select");
-      for (const option of field.options) {
-        input.append(new Option(option, option));
-      }
+      field.options.forEach((option, index) => {
+        input.append(new Option(field.optionLabels?.[index] ?? option, option));
+      });
       input.value = field.default;
     } else {
       input = document.createElement("input");
-      input.type = field.type === "number" ? "number" : "text";
+      input.type = field.type === "number" ? "number"
+                 : field.type === "date" ? "date" : "text";
       if (field.type === "number") { input.min = 1; input.max = 31; }
       if (field.inputmode) input.inputMode = field.inputmode;
       input.value = field.default ?? "";
     }
     input.id = `f-${field.key}`;
+    // Changing the frequency changes which of the schedule fields apply.
+    if (field.key === "frequency") input.onchange = applyFieldVisibility;
     label.append(input);
     host.append(label);
+  }
+  applyFieldVisibility();
+}
+
+/** Show only the schedule fields that the chosen frequency actually uses. */
+function applyFieldVisibility() {
+  const spec = SPEC[state.kind];
+  const frequency = $("f-frequency")?.value ?? "monthly";
+  for (const field of spec.fields) {
+    if (!field.showFor) continue;
+    const wrap = $(`wrap-${field.key}`);
+    if (wrap) wrap.hidden = !field.showFor.includes(frequency);
+  }
+  const note = $("schedule-note");
+  if (note) {
+    note.textContent = frequency === "biweekly"
+      ? "Paid every 2 weeks — that's 26 payments a year, so the monthly figure is a little over twice your cheque."
+      : frequency === "weekly"
+      ? "Paid weekly — 52 payments a year, averaged across the months."
+      : "";
+    note.hidden = !note.textContent;
   }
 }
 
@@ -240,6 +298,7 @@ function loadIntoEditor(record) {
   for (const field of SPEC[state.kind].fields) {
     $(`f-${field.key}`).value = record[field.key] ?? field.default ?? "";
   }
+  applyFieldVisibility();
   $("record-error").textContent = "";
   $("editor-title").textContent = `Editing ${record.name}`;
   $("save-btn").textContent = "Save changes";
@@ -255,6 +314,14 @@ function visibleRows() {
 
   const key = state.sort[state.kind];
   return [...rows].sort((a, b) => {
+    if (state.kind === "income" && key === "amount") {
+      const cmp = db.monthlyEquivalent(a) - db.monthlyEquivalent(b);
+      return state.reverse ? -cmp : cmp;
+    }
+    if (key === "schedule") {
+      const cmp = (db.nextPayDate(a) ?? 0) - (db.nextPayDate(b) ?? 0);
+      return state.reverse ? -cmp : cmp;
+    }
     const [x, y] = [a[key], b[key]];
     const cmp = typeof x === "string"
       ? x.localeCompare(y)
@@ -270,7 +337,8 @@ function renderLedger() {
   $("ledger-title").textContent = state.kind === "bills" ? "Bills" : "Income";
   $("search").placeholder = `Search ${state.kind}…`;
   $("ledger-sub").textContent = records().length
-    ? `${db.money(db.total(records()))} per month`
+    ? `${db.money(state.kind === "income"
+        ? db.monthlyIncome(records()) : db.total(records()))} per month`
     : `No ${state.kind} yet`;
 
   // Header
@@ -317,7 +385,14 @@ function renderLedger() {
       const td = document.createElement("td");
       if (column.key === "amount") {
         td.className = "num";
-        td.textContent = db.money(Number(record.amount));
+        // Income is shown per month so the column is comparable down the page;
+        // the raw packet is in the schedule cell beside it.
+        td.textContent = state.kind === "income"
+          ? db.money(db.monthlyEquivalent(record))
+          : db.money(Number(record.amount));
+      } else if (column.key === "schedule") {
+        td.className = "muted";
+        td.textContent = db.describeSchedule(record);
       } else if (column.key === spec.dayField) {
         td.className = "mid muted";
         td.textContent = db.ordinal(record[column.key]);
@@ -339,7 +414,7 @@ function renderLedger() {
 }
 
 function renderHero() {
-  const incoming = db.total(state.income);
+  const incoming = db.monthlyIncome(state.income);
   const outgoing = db.total(state.bills);
   const spare = incoming - outgoing;
 
@@ -363,7 +438,10 @@ function renderHero() {
     : "none yet";
 
   const upcomingBill = db.nextDue(state.bills, "due_day");
-  const upcomingPay = db.nextDue(state.income, "pay_day");
+  const upcomingPay = [...state.income]
+    .map((row) => ({ row, at: db.nextPayDate(row) }))
+    .filter((entry) => entry.at)
+    .sort((a, b) => a.at - b.at)[0];
   const when = (days) => (days === 0 ? "Today" : days === 1 ? "Tomorrow" : `In ${days} days`);
 
   if (upcomingBill) {
@@ -372,9 +450,12 @@ function renderHero() {
     $("chip-next").textContent = when(days);
     $("chip-next-note").textContent = `${upcomingBill.name} · ${db.ordinal(upcomingBill.due_day)}`;
   } else if (upcomingPay) {
+    const days = Math.round(
+      (upcomingPay.at - new Date().setHours(0, 0, 0, 0)) / 86400000);
     $("chip-next-label").textContent = "Next payday";
-    $("chip-next").textContent = when(db.daysUntil(upcomingPay.pay_day));
-    $("chip-next-note").textContent = `${upcomingPay.name} · ${db.ordinal(upcomingPay.pay_day)}`;
+    $("chip-next").textContent = when(days);
+    $("chip-next-note").textContent =
+      `${upcomingPay.row.name} · ${db.describeSchedule(upcomingPay.row)}`;
   } else {
     $("chip-next-label").textContent = "Next due";
     $("chip-next").textContent = "—";
@@ -584,7 +665,7 @@ function wireApp() {
       state.kind = button.dataset.kind;
       state.editingId = null;
       state.search = "";
-      state.sort[state.kind] = SPEC[state.kind].dayField;
+      state.sort[state.kind] = SPEC[state.kind].defaultSort;
       state.reverse = false;
       $("search").value = "";
       for (const other of $("kind-tabs").children) {

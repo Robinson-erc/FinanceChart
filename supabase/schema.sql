@@ -63,15 +63,49 @@ create table if not exists public.bills (
   updated_at timestamptz not null default now()
 );
 
+-- Income carries a frequency because most people are not paid monthly.
+--
+-- `pay_day` (and `pay_day_2`) describe pay tied to dates in the month;
+-- `anchor_date` describes pay on a fixed cycle, and holds one known payday
+-- that the rest are counted from. The distinction matters for the monthly
+-- figure: fortnightly pay is 26 packets a year, not 24, so treating it as
+-- "twice a month" understates a year's income by roughly 8%.
 create table if not exists public.income (
-  id         uuid primary key default gen_random_uuid(),
-  user_id    uuid not null references auth.users (id) on delete cascade,
-  name       text not null check (length(trim(name)) > 0),
-  amount     numeric(12, 2) not null check (amount > 0),
-  pay_day    smallint not null default 1 check (pay_day between 1 and 31),
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  name        text not null check (length(trim(name)) > 0),
+  amount      numeric(12, 2) not null check (amount > 0),
+  frequency   text not null default 'monthly'
+                check (frequency in ('monthly', 'semimonthly', 'biweekly', 'weekly')),
+  pay_day     smallint not null default 1 check (pay_day between 1 and 31),
+  pay_day_2   smallint check (pay_day_2 between 1 and 31),
+  anchor_date date,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
 );
+
+-- Existing projects predate the frequency columns.
+alter table public.income
+  add column if not exists frequency text not null default 'monthly',
+  add column if not exists pay_day_2 smallint,
+  add column if not exists anchor_date date;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'income_frequency_check') then
+    alter table public.income add constraint income_frequency_check
+      check (frequency in ('monthly', 'semimonthly', 'biweekly', 'weekly'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'income_schedule_check') then
+    -- A cycle-based schedule is meaningless without the date it counts from.
+    alter table public.income add constraint income_schedule_check
+      check (frequency in ('monthly', 'semimonthly') or anchor_date is not null);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'income_pay_day_2_check') then
+    alter table public.income add constraint income_pay_day_2_check
+      check (pay_day_2 is null or pay_day_2 between 1 and 31);
+  end if;
+end $$;
 
 create index if not exists bills_user_idx on public.bills (user_id);
 create index if not exists income_user_idx on public.income (user_id);
