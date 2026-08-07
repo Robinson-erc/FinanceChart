@@ -94,10 +94,17 @@ alter table public.income      enable row level security;
 -- the cascade from auth.users.
 grant usage on schema public to anon, authenticated;
 
-grant select, update                 on public.profiles    to authenticated;
 grant select, insert, update, delete on public.connections to authenticated;
 grant select, insert, update, delete on public.bills       to authenticated;
 grant select, insert, update, delete on public.income      to authenticated;
+
+-- profiles is deliberately narrower. A row-level policy can only say "you may
+-- update this row" — it cannot say which columns. Granting UPDATE on the whole
+-- table would let anyone set is_admin on their own row and hand themselves the
+-- export. The privilege is therefore restricted to the one column a user owns.
+grant select on public.profiles to authenticated;
+revoke update on public.profiles from authenticated;
+grant update (display_name) on public.profiles to authenticated;
 
 
 -- ========================================================= 2. functions
@@ -221,6 +228,60 @@ create policy "delete own income" on public.income
 
 
 -- ========================================================== 4. triggers
+
+-- Column ownership on connections.
+--
+-- The row-level policy lets either party update a connection they are part of,
+-- but it cannot express *which columns* each of them owns. Without this guard,
+-- the addressee can set `requester_shares` — forcing the other person to share
+-- their finances without consent, which is the one thing this app promises
+-- cannot happen. Column-level GRANTs cannot express it either: which flag you
+-- may write depends on the row, not just your role. So it is a trigger.
+create or replace function public.guard_connection_update()
+returns trigger
+language plpgsql
+as $$
+declare
+  me uuid := auth.uid();
+begin
+  -- No JWT means the service role or the SQL editor, which is trusted.
+  if me is null then
+    return new;
+  end if;
+
+  if new.id <> old.id
+     or new.requester_id <> old.requester_id
+     or new.addressee_id <> old.addressee_id
+     or new.created_at <> old.created_at then
+    raise exception 'a connection''s identity cannot be changed';
+  end if;
+
+  if new.requester_shares is distinct from old.requester_shares
+     and me is distinct from old.requester_id then
+    raise exception 'only that person may change their own sharing';
+  end if;
+
+  if new.addressee_shares is distinct from old.addressee_shares
+     and me is distinct from old.addressee_id then
+    raise exception 'only that person may change their own sharing';
+  end if;
+
+  if new.status is distinct from old.status then
+    if me is distinct from old.addressee_id then
+      raise exception 'only the person invited may answer an invitation';
+    end if;
+    if old.status <> 'pending' then
+      raise exception 'this invitation has already been answered';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists connections_guard on public.connections;
+create trigger connections_guard before update on public.connections
+  for each row execute function public.guard_connection_update();
 
 -- Give every new account a profile automatically.
 create or replace function public.handle_new_user()
