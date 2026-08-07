@@ -56,14 +56,27 @@ def account(email):
     raise SystemExit(f"could not get a session for {email}: {status} {payload}")
 
 
+def reset(token):
+    """Clear anything a previous run left behind, so this one starts clean."""
+    for table in ("bills", "income"):
+        call("DELETE", f"/rest/v1/{table}?id=not.is.null", token)
+    call("DELETE", "/rest/v1/connections?id=not.is.null", token)
+
+
 print("== accounts ==")
 a_token, a_id = account(A_EMAIL)
 b_token, b_id = account(B_EMAIL)
 print(f"  A {a_id}\n  B {b_id}")
 
+reset(a_token)
+reset(b_token)
+print("  reset previous state")
+
 print("\n== profile row created by the signup trigger ==")
 status, rows = call("GET", f"/rest/v1/profiles?id=eq.{a_id}&select=id,display_name", a_token)
-check("A has a profile", status == 200 and rows and rows[0]["id"] == a_id, f"{status} {rows}")
+check("A has a profile",
+      status == 200 and isinstance(rows, list) and rows and rows[0]["id"] == a_id,
+      f"{status} {rows}")
 
 print("\n== A writes its own data ==")
 status, created = call("POST", "/rest/v1/bills", a_token,
@@ -134,7 +147,8 @@ call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", a_token, {"requester_shar
 call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", b_token, {"requester_shares": True})
 _, flags = call("GET", f"/rest/v1/connections?id=eq.{conn_id}&select=requester_shares",
                 a_token)
-check("B cannot force A to share", flags and flags[0]["requester_shares"] is False,
+check("B cannot force A to share",
+      isinstance(flags, list) and flags and flags[0]["requester_shares"] is False,
       f"requester_shares={flags}")
 _, rows = call("GET", "/rest/v1/bills?select=name", b_token)
 check("forced sharing leaks nothing", rows == [], f"{rows}")
@@ -143,13 +157,15 @@ print("\n== B cannot answer an invitation on A's behalf, or re-answer ==")
 status, _ = call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", a_token,
                  {"status": "declined"})
 _, flags = call("GET", f"/rest/v1/connections?id=eq.{conn_id}&select=status", a_token)
-check("requester cannot change status", flags and flags[0]["status"] == "accepted",
+check("requester cannot change status",
+      isinstance(flags, list) and flags and flags[0]["status"] == "accepted",
       f"status={flags}")
 
 print("\n== nobody can promote themselves to admin ==")
 call("PATCH", f"/rest/v1/profiles?id=eq.{b_id}", b_token, {"is_admin": True})
 _, me = call("GET", f"/rest/v1/profiles?id=eq.{b_id}&select=is_admin", b_token)
-check("is_admin is not self-writable", me and me[0]["is_admin"] is False, f"{me}")
+check("is_admin is not self-writable",
+      isinstance(me, list) and me and me[0]["is_admin"] is False, f"{me}")
 status, payload = call("POST", "/rest/v1/rpc/export_bills", b_token, {})
 check("export still refused after the attempt", status >= 400,
       f"HTTP {status} {str(payload)[:70]}")
@@ -158,7 +174,8 @@ print("\n== display name is still editable ==")
 status, _ = call("PATCH", f"/rest/v1/profiles?id=eq.{b_id}", b_token,
                  {"display_name": "Beta"})
 _, me = call("GET", f"/rest/v1/profiles?id=eq.{b_id}&select=display_name", b_token)
-check("own display_name can be set", me and me[0]["display_name"] == "Beta", f"{me}")
+check("own display_name can be set",
+      isinstance(me, list) and me and me[0]["display_name"] == "Beta", f"{me}")
 
 # Restore sharing so the revocation check below still means something.
 call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", a_token, {"requester_shares": True})
