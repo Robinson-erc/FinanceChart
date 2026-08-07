@@ -83,6 +83,22 @@ alter table public.connections enable row level security;
 alter table public.bills       enable row level security;
 alter table public.income      enable row level security;
 
+-- Table privileges are a separate layer from row-level security, and both are
+-- required. GRANT decides whether a role may touch the table at all; RLS then
+-- decides which rows it sees. Newer Supabase projects no longer grant to these
+-- roles automatically, so it is spelled out here.
+--
+-- Only `authenticated` is granted. Nothing in this app is reachable while
+-- signed out, so `anon` gets schema usage and nothing more. `profiles` allows
+-- no insert or delete: rows are created by the signup trigger and removed by
+-- the cascade from auth.users.
+grant usage on schema public to anon, authenticated;
+
+grant select, update                 on public.profiles    to authenticated;
+grant select, insert, update, delete on public.connections to authenticated;
+grant select, insert, update, delete on public.bills       to authenticated;
+grant select, insert, update, delete on public.income      to authenticated;
+
 
 -- ========================================================= 2. functions
 
