@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinanceChart — plan your month together</title>
+<meta name="description" content="A private budget tracker for recurring bills and income, with opt-in sharing between people planning together.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%236d5ef0'/%3E%3Ctext x='16' y='23' font-family='sans-serif' font-size='19' font-weight='800' fill='%23fff' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Shown until Supabase is configured. -->
+<div id="setup" class="auth-wrap hidden">
+  <div class="panel auth-card">
+    <div class="wordmark"><div class="badge">L</div>
+      <div><div class="name">FINANCECHART</div><div class="sub">setup needed</div></div>
+    </div>
+    <h1>Almost there</h1>
+    <p class="lede">This build has no backend attached yet. Add your Supabase
+      project URL and anon key to <code>web/config.js</code>, then reload.</p>
+    <p class="notice">Both values are safe to publish — the anon key identifies
+      the project, it does not grant access. Access is decided by the row-level
+      security policies in <code>supabase/schema.sql</code>.</p>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------- sign in -->
+<div id="auth" class="auth-wrap hidden">
+  <div class="panel auth-card">
+    <div class="wordmark"><div class="badge">L</div>
+      <div><div class="name">FINANCECHART</div><div class="sub">monthly budget</div></div>
+    </div>
+
+    <h1 id="auth-title">Welcome back</h1>
+    <p class="lede" id="auth-lede">Sign in to see where your month is going.</p>
+
+    <form id="auth-form" autocomplete="on">
+      <label class="field" id="name-field" hidden>
+        <span>Your name</span>
+        <input id="auth-name" type="text" autocomplete="name" placeholder="Alex">
+      </label>
+      <label class="field">
+        <span>Email</span>
+        <input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input id="auth-password" type="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters">
+      </label>
+
+      <p class="error" id="auth-error" role="alert"></p>
+      <button class="btn btn-primary" id="auth-submit" style="width:100%" type="submit">Sign in</button>
+    </form>
+
+    <p class="auth-switch">
+      <span id="auth-switch-text">New here?</span>
+      <button type="button" id="auth-switch">Create an account</button>
+    </p>
+    <p class="auth-switch">
+      <button type="button" id="auth-forgot">Forgot your password?</button>
+    </p>
+
+    <p class="notice" style="margin-top:22px">
+      Your finances are private by default. Nothing is shared with anyone until
+      you explicitly turn sharing on for a person you have connected with.
+      <a href="privacy.html">How your data is handled</a>.
+    </p>
+  </div>
+</div>
+
+<!-- ----------------------------------------------------------------- app -->
+<div id="app" class="shell hidden">
+
+  <header class="topbar">
+    <div class="wordmark">
+      <div class="badge">L</div>
+      <div><div class="name">FINANCECHART</div><div class="sub" id="whose">monthly budget</div></div>
+    </div>
+    <div class="spacer"></div>
+
+    <div class="tabs" role="tablist" id="view-tabs">
+      <button role="tab" data-view="budget" aria-selected="true">Budget</button>
+      <button role="tab" data-view="people" aria-selected="false">People</button>
+      <button role="tab" data-view="account" aria-selected="false">Account</button>
+    </div>
+
+    <label class="field" style="width:auto" id="viewing-wrap" hidden>
+      <span>Viewing</span>
+      <select id="viewing" style="min-width:190px"></select>
+    </label>
+
+    <button class="icon-btn" id="theme-toggle" title="Switch theme" aria-label="Switch theme">☾</button>
+  </header>
+
+  <!-- ============================ BUDGET ============================= -->
+  <section id="view-budget">
+    <div class="panel hero">
+      <div class="hero-grid">
+        <div>
+          <p class="eyebrow" id="hero-label">Left over this month</p>
+          <p class="hero-figure" id="hero-value">—</p>
+        </div>
+        <div class="chips">
+          <div class="chip">
+            <p class="eyebrow">Monthly income</p>
+            <div class="value" id="chip-income">—</div>
+            <div class="note" id="chip-income-note">none yet</div>
+          </div>
+          <div class="chip">
+            <p class="eyebrow">Monthly bills</p>
+            <div class="value" id="chip-bills">—</div>
+            <div class="note" id="chip-bills-note">none yet</div>
+          </div>
+          <div class="chip">
+            <p class="eyebrow" id="chip-next-label">Next due</p>
+            <div class="value" id="chip-next">—</div>
+            <div class="note" id="chip-next-note">nothing scheduled</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="meter">
+        <div class="meter-track">
+          <div class="meter-fill" id="meter-fill"></div>
+          <div class="meter-over" id="meter-over" style="display:none"></div>
+        </div>
+        <p class="meter-caption" id="meter-caption"></p>
+      </div>
+    </div>
+
+    <div class="columns">
+      <!-- ledger -->
+      <div class="panel pane">
+        <div class="pane-head">
+          <div>
+            <h2 id="ledger-title">Bills</h2>
+            <div class="sub" id="ledger-sub">No bills yet</div>
+          </div>
+          <div class="tabs" role="tablist" id="kind-tabs">
+            <button role="tab" data-kind="bills" aria-selected="true">Bills</button>
+            <button role="tab" data-kind="income" aria-selected="false">Income</button>
+          </div>
+        </div>
+
+        <input id="search" type="search" placeholder="Search bills…" aria-label="Search">
+
+        <div class="scroll-y" style="margin-top:12px">
+          <table class="ledger" id="ledger-table">
+            <thead id="ledger-head"></thead>
+            <tbody id="ledger-body"></tbody>
+          </table>
+          <div id="ledger-empty"></div>
+        </div>
+
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-danger" id="delete-btn">Delete</button>
+          <span class="small muted" id="selection-hint"></span>
+        </div>
+
+        <hr class="divider">
+
+        <form id="record-form">
+          <h3 style="margin:0 0 14px;font-size:15px" id="editor-title">Add a bill</h3>
+          <div class="form-grid" id="editor-fields"></div>
+          <p class="error" id="record-error" role="alert"></p>
+          <div class="row">
+            <button class="btn btn-primary" type="submit" id="save-btn">Add a bill</button>
+            <button class="btn btn-quiet" type="button" id="clear-btn">Clear</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- charts -->
+      <div class="panel pane">
+        <p class="eyebrow" id="bars-title">Bills by amount</p>
+        <div id="bars" style="margin-top:14px"></div>
+
+        <p class="eyebrow" style="margin-top:26px">Where it goes</p>
+        <div id="ribbon" style="margin-top:14px"></div>
+        <div class="chart-legend" id="ribbon-legend"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ PEOPLE ============================= -->
+  <section id="view-people" class="hidden">
+    <div class="columns">
+      <div class="panel pane">
+        <div class="pane-head">
+          <div>
+            <h2>Your people</h2>
+            <div class="sub">Sharing is off until you turn it on</div>
+          </div>
+        </div>
+        <div id="connections"></div>
+      </div>
+
+      <div class="panel pane">
+        <div class="pane-head"><div><h2>Connect with someone</h2>
+          <div class="sub">They need an account first</div></div></div>
+
+        <form id="invite-form">
+          <div class="form-grid">
+            <label class="field">
+              <span>Their email</span>
+              <input id="invite-email" type="email" required placeholder="them@example.com">
+            </label>
+            <label class="field">
+              <span>Relationship</span>
+              <input id="invite-relationship" list="relationships" placeholder="Partner">
+              <datalist id="relationships"></datalist>
+            </label>
+          </div>
+          <p class="error" id="invite-error" role="alert"></p>
+          <button class="btn btn-primary" type="submit">Send invitation</button>
+        </form>
+
+        <p class="notice" style="margin-top:22px">
+          Connecting does not reveal anything on its own. Once an invitation is
+          accepted, each of you decides separately whether to share your figures
+          with the other, and either of you can switch it off at any time.
+          Sharing is read-only — nobody can edit your records but you.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================== ACCOUNT ============================= -->
+  <section id="view-account" class="hidden">
+    <div class="columns">
+      <div class="panel pane">
+        <div class="pane-head"><div><h2>Account</h2>
+          <div class="sub" id="account-email"></div></div></div>
+
+        <form id="profile-form">
+          <label class="field">
+            <span>Display name</span>
+            <input id="profile-name" type="text" placeholder="What your people see">
+          </label>
+          <p class="error" id="profile-error" role="alert"></p>
+          <div class="row">
+            <button class="btn btn-primary" type="submit">Save</button>
+            <button class="btn" type="button" id="signout-btn">Sign out</button>
+          </div>
+        </form>
+
+        <hr class="divider">
+
+        <h3 style="margin:0 0 6px;font-size:15px">Your data</h3>
+        <p class="small muted" style="margin:0 0 14px">
+          A full copy of your own bills and income, descriptions included.
+          Yours to keep, at any time.
+        </p>
+        <div class="row">
+          <button class="btn" id="export-mine">Download my data (CSV)</button>
+        </div>
+        <p class="error" id="mine-error" role="alert"></p>
+
+        <hr class="divider">
+        <p class="notice">
+          Your records are visible only to you, and to anyone you have
+          explicitly chosen to share with. <a href="privacy.html">Read the full
+          privacy note</a>.
+        </p>
+      </div>
+
+      <div class="panel pane hidden" id="admin-pane">
+        <div class="pane-head"><div><h2>Reporting export</h2>
+          <div class="sub">Anonymised · for Power BI</div></div>
+          <span class="tag is-accent">Admin</span></div>
+
+        <p class="notice" style="margin-bottom:16px">
+          These files contain amounts, categories and dates only. Names, emails
+          and the free-text description of each bill are never included — a
+          description like “Aspen estate mortgage” identifies a household on its
+          own. Rows are grouped by an opaque household key so you can still
+          compare across accounts.
+        </p>
+
+        <div class="row">
+          <button class="btn btn-primary" id="export-bills">Export bills CSV</button>
+          <button class="btn" id="export-income">Export income CSV</button>
+        </div>
+        <p class="error" id="export-error" role="alert"></p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div id="modal-host"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

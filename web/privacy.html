@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How your data is handled — FinanceChart</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%236d5ef0'/%3E%3Ctext x='16' y='23' font-family='sans-serif' font-size='19' font-weight='800' fill='%23fff' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Inter:wght@400..700&family=JetBrains+Mono:wght@400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .doc { max-width: 720px; margin: 0 auto; padding: 40px 22px 80px; }
+  .doc h1 { font-size: clamp(30px, 5vw, 42px); font-weight: 800; font-stretch: 80%; margin: 18px 0 8px; }
+  .doc h2 { font-size: 19px; margin: 38px 0 10px; }
+  .doc p, .doc li { color: var(--ink-secondary); line-height: 1.65; font-size: 15px; }
+  .doc li { margin-bottom: 8px; }
+  .doc .lede { font-size: 17px; color: var(--ink); }
+  .doc code { font-family: var(--mono); font-size: 13px; background: var(--inset); padding: 2px 6px; border-radius: 5px; }
+  .back { display: inline-block; margin-bottom: 8px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <a class="back" href="index.html">← Back to the app</a>
+
+  <div class="wordmark" style="margin-bottom:6px">
+    <div class="badge">L</div>
+    <div><div class="name">FINANCECHART</div><div class="sub">privacy</div></div>
+  </div>
+
+  <h1>How your data is handled</h1>
+  <p class="lede">Short version: your figures are yours. Nobody sees them unless
+    you switch sharing on for a specific person, and the reporting export is
+    stripped of anything that identifies you.</p>
+
+  <h2>What is stored</h2>
+  <p>Your email address, a display name you choose, and the bills and income you
+    enter — a description, an amount, a category, and the day of the month.
+    That is the whole of it. No bank connection, no account numbers, no
+    transactions, no card details. Nothing is imported from anywhere; every row
+    exists because someone typed it in.</p>
+
+  <h2>Who can see it</h2>
+  <ul>
+    <li><strong>You</strong>, always.</li>
+    <li><strong>A person you have connected with</strong> — but only after you
+      accept the connection <em>and</em> switch on “Share my figures with them”.
+      Those are two separate steps. Accepting a connection on its own reveals
+      nothing.</li>
+    <li>Sharing is <strong>read-only and one-directional</strong>. They can look;
+      they cannot edit or delete. Them sharing with you does not share you with
+      them — each side controls its own switch, and either of you can turn it off
+      at any moment.</li>
+    <li><strong>Nobody else.</strong> Not other users of the app, and not people
+      you have merely been invited by.</li>
+  </ul>
+
+  <h2>How that is enforced</h2>
+  <p>In the database, not in this web page. Every request runs through Postgres
+    row-level security policies that check who is asking before returning a
+    single row. The code running in your browser is public and could be modified
+    by anyone — so it is never trusted to make that decision. If someone rewrote
+    this page to ask for another person's bills, the database would return
+    nothing.</p>
+  <p>You can read the exact rules: they are in
+    <code>supabase/schema.sql</code> in the public repository.</p>
+
+  <h2>The reporting export</h2>
+  <p>The project owner can export data to build charts in Power BI — averages,
+    category breakdowns, how a typical month is distributed. <strong>That export
+    is anonymised.</strong> It contains:</p>
+  <ul>
+    <li>An opaque household key — a random identifier with no link back to a name
+      or an email, so rows from the same household can be grouped without
+      identifying whose they are.</li>
+    <li>The amount, the category, and the day of the month.</li>
+  </ul>
+  <p>It deliberately <strong>excludes</strong> your name, your email, and the
+    free-text description of each bill. That last one matters: a description like
+    “Aspen estate mortgage” names a household on its own, so it never leaves the
+    database.</p>
+  <p>The export is used for aggregate reporting — averages, distributions and
+    charts. It is not used to look at any individual's finances, and it is not
+    shared or sold to anyone.</p>
+
+  <h2>Where it lives</h2>
+  <p>The database is a Supabase project (hosted Postgres) in a single region.
+    Passwords are hashed by Supabase's authentication service and are never
+    visible to the app or its owner. This site itself is static files on GitHub
+    Pages and holds no data.</p>
+
+  <h2>Deleting your data</h2>
+  <p>Delete individual bills and income from the app at any time; removal is
+    immediate. To delete your entire account and everything attached to it, ask
+    the project owner — account rows cascade, so removing the account removes all
+    of its records.</p>
+
+  <h2>Being straight about the limits</h2>
+  <p>This is a personal project built for a household, not a regulated financial
+    product. It has not been independently security-audited. It is a reasonable
+    place to plan a budget; it is not the place for anything you would be
+    seriously harmed by losing. Keep your own copy of anything that matters —
+    the export button is right there.</p>
+
+  <p class="small muted" style="margin-top:40px">
+    Last updated when this page was written. If the rules change, this page
+    changes with them — it is versioned in the same repository as the code.
+  </p>
+</div>
+<script>
+  document.documentElement.dataset.theme = localStorage.getItem("fc-theme") || "dark";
+</script>
+</body>
+</html>

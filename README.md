@@ -1,140 +1,152 @@
-# Ledger
+# FinanceChart
 
-A desktop budget tracker for recurring bills and income. Python, Tkinter, and a
-lot of Pillow.
+A budget tracker for recurring bills and income, built so two people can plan
+together without handing each other a spreadsheet.
 
-![The bills view in dark mode](docs/screenshot-dark.png)
+![The budget view in dark mode](docs/screenshots/web-dark.jpg)
 
-I wanted to know one number — what's actually left over each month — without
-opening a spreadsheet. That's the headline figure, and everything else on screen
-explains it.
+My partner and I are saving for a house. I wanted one number — what's actually
+left over each month — for each of us, plus the option to show each other the
+detail without either of us being obliged to. That's the whole product.
+
+**[Open the app →](https://robinson-erc.github.io/FinanceChart/)**
 
 ## What it does
 
-- Track recurring **bills** (name, amount, category, day of the month) and
-  **income** sources in two tabs that share the same table, search, sort and
-  editor.
-- A **meter** showing what share of your income the bills consume. Go over and
-  it keeps drawing past the end of the track in red rather than capping at 100%.
-- **Bills by amount** and a **category split**, both redrawn as the data changes.
-- Everything is stored as plain CSV next to the code. Edit it by hand, diff it,
-  keep it in git — it's four columns.
+- **Real accounts.** Email and password, one budget per person.
+- **Private by default.** Your figures are yours. Nobody sees them until you
+  connect with a person *and* switch sharing on — two deliberate steps.
+- **Opt-in, one-directional sharing.** You label the relationship yourself
+  (partner, wife, husband, fiancé, housemate, friend, whatever fits). Each side
+  controls its own switch independently, sharing is read-only, and either of you
+  can turn it off at any moment.
+- **The month at a glance.** What's left over, a meter showing how much of your
+  income the bills consume, bills ranked by size, and where the money goes by
+  category.
+- **Anonymised reporting export** for Power BI — amounts and categories only,
+  never names or descriptions.
+- **Your own data, any time.** Every user can download a full copy of their
+  records.
 - Light and dark, both deliberately designed rather than one inverted.
 
-## Running it
+| Sign in | Light mode |
+|---|---|
+| ![Sign in](docs/screenshots/web-signin.jpg) | ![Light mode](docs/screenshots/web-light.jpg) |
+
+## How privacy actually works
+
+This matters more than the features, so it's worth being precise.
+
+The frontend is static files on GitHub Pages. Anyone can read that code, and
+anyone can modify their copy of it. So **it is never trusted to decide who sees
+what.** Every request goes to Postgres as the signed-in user, and row-level
+security policies decide what comes back. If someone rewrote the page to ask for
+another person's bills, the database would return nothing.
+
+The rules are in [`supabase/schema.sql`](supabase/schema.sql) — about 60 lines of
+policy you can read in full. The short version:
+
+- You may read and write your own rows, always.
+- You may read someone else's rows only if there is an *accepted* connection
+  between you **and** they have set their own sharing flag. Two conditions,
+  both required.
+- You may never write to someone else's rows. Sharing is read-only.
+- The reporting export runs as a `SECURITY DEFINER` function that checks the
+  admin flag itself, and returns a pseudonymous household key, category, amount
+  and date. Names, emails and bill descriptions never leave the database — a
+  description like "Aspen estate mortgage" identifies a household on its own.
+
+The full plain-English version is at [`web/privacy.html`](web/privacy.html), and
+it's linked from the sign-in screen.
+
+## Running it yourself
+
+**1. Create a Supabase project** at [supabase.com](https://supabase.com) — the
+free tier is plenty for a household.
+
+**2. Run the schema.** Dashboard → SQL Editor → New query, paste
+[`supabase/schema.sql`](supabase/schema.sql), run. It's idempotent, so re-running
+is safe.
+
+**3. Point the frontend at it.** In `web/config.js`, set `SUPABASE_URL` and
+`SUPABASE_ANON_KEY` from Dashboard → Project Settings → API.
+
+> Both values are safe to commit. The anon key identifies the project; it does
+> not grant access. Never put the **service role** key there — that one bypasses
+> every policy.
+
+**4. Serve it.** Any static host. Locally:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python main.py
+cd web && python3 -m http.server 8000
 ```
 
-One dependency: Pillow. The interface is drawn, not assembled from widgets, so
-there's no UI toolkit beyond what ships with Python.
+Pushing to `main` deploys to GitHub Pages automatically via
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml).
 
-The repo includes a demo month in `bills.csv` and `income.csv` so there's
-something on screen the first time you run it. Delete both files to start empty.
+**5. Make yourself an admin** (only needed for the reporting export). After
+signing up, in the SQL editor:
 
-## Screenshots
+```sql
+update profiles set is_admin = true
+where id = (select id from auth.users where email = 'you@example.com');
+```
 
-| Light mode | Income tab |
+## Layout
+
+| Path | What it is |
 |---|---|
-| ![Light mode](docs/screenshot-light.png) | ![Income tab](docs/screenshot-income.png) |
+| `web/` | The site. Plain HTML, CSS and ES modules — no build step, no framework. |
+| `supabase/schema.sql` | Tables, row-level security policies, and the export functions. |
+| `desktop/` | The original Python app (v1). Still runs standalone on CSV files. |
+| `docs/screenshots/` | Images for this README. |
 
-When bills exceed income, the hero figure goes negative and red, the meter
-overruns its track, and the caption says so in words — the colour never carries
-that meaning on its own:
+The only runtime dependency is `@supabase/supabase-js`, loaded from a CDN. No
+bundler, no `node_modules`, nothing to install to work on the frontend.
 
-![Overspending](docs/screenshot-overspend.png)
+## Design notes
 
-## How it's built
-
-| File | What it owns |
-|---|---|
-| `main.py` | Entry point. |
-| `models.py` | `Bill`, `Income`, validation, and the monthly summaries. |
-| `storage.py` | CSV persistence, one repository per record type. |
-| `theme.py` | The palette, type scale and metrics, for both modes. |
-| `paint.py` | Pillow primitives: gradients, frosted glass, shadows, glow, type. |
-| `charts.py` | The three data marks, drawn by hand. |
-| `ui.py` | Painted components — panels, buttons, table rows, the modal. |
-| `app.py` | Layout, render orchestration, and event routing. |
-| `palette_check.py` | Colour audit. Run it after touching the palette. |
-
-### The interface is painted, not assembled
-
-ttk can't express any of the look I was after — no frosted panels, no gradient
-fills, no rounded data-ends, no condensed display type. So the whole window is
-one `tk.Canvas`. Each frame is composited as a single Pillow image and blitted;
-real `tk.Entry` widgets are floated only over the fields that need a caret.
-
-That trade is worth being honest about. I gave up every widget behaviour Tk
-provides for free — hit testing, hover, focus rings, scrolling, z-order — and had
-to write all of it. `ui.py` draws components and records the rectangle each one
-occupies; `app.py` routes clicks and hovers against that registry. In exchange I
-get to decide what every pixel does.
-
-Two bugs came directly from that choice and are worth knowing about if you read
-the code. Tk widgets always stack above the canvas, so the entries punched
-straight through the modal scrim and the open dropdown until I withdrew them
-while an overlay is up. And Pillow has no letter-spacing, so tracked labels are
-drawn a glyph at a time — anchoring each glyph to its own top instead of a shared
-baseline left commas and periods floating at cap height.
-
-### Rendering stays interactive by layering
-
-A naive full repaint was 75 ms — visibly laggy on hover. Three layers of caching
-brought it to about 21 ms:
-
-- The plane and its frosted panels are composited once per size and theme.
-- Charts are rebuilt only when their data, size or theme changes.
-- Rounded shapes, blurred shadows and rasterised text are memoised. Text was the
-  biggest win: 520 draw calls were producing 2050 glyph renders per frame.
-
-### Colour is measured, not eyeballed
-
-`palette_check.py` audits both modes and exits non-zero on a failure. It checks
-WCAG contrast for every ink and control, and separation between adjacent
-categorical slots in OKLab — for normal vision and for simulated protanopia,
-deuteranopia and tritanopia.
-
-It caught two things I'd have shipped otherwise: the green and violet series
-slots were 6.7 ΔE apart under tritanopia (the floor is 8), and the sequential
-ramp started at 1.5:1 against the surface, which is invisible. Both were fixed by
-searching for passing steps rather than nudging hex values by eye.
+**Colour is measured, not picked.** The palette came out of
+[`desktop/palette_check.py`](desktop/palette_check.py), which audits WCAG contrast
+and OKLab separation between adjacent series colours under simulated protanopia,
+deuteranopia and tritanopia. It caught two things I'd otherwise have shipped: two
+series sat 6.7 ΔE apart under tritanopia against a floor of 8, and the sequential
+ramp started at 1.5:1 against the background, which is invisible.
 
 Colour is also assigned by the job it does. Bill magnitude uses one hue's ramp,
-so the bars read as one measure. The category split uses fixed categorical slots,
-so a category keeps its colour when the data changes. Past eight categories the
-tail folds into "Other" instead of inventing a ninth hue that nothing could
-distinguish.
+so the bars read as a single measure. Categories use fixed slots, so a category
+keeps its colour as the data changes. Past eight categories the tail folds into
+"Other" rather than inventing a ninth hue nothing could distinguish. Text drawn
+on a coloured fill picks black or white per colour — on the light palette several
+series are dark enough that black would fail.
 
-### The data layer is boring on purpose
+**Status colour never carries meaning alone.** When bills exceed income the hero
+figure goes red *and* the meter runs past the end of its track *and* the caption
+says "Bills exceed income by $X". Any one of those could be missed.
 
-`models.py` and `storage.py` have no idea a UI exists. `Bill.parse` takes raw
-strings and either returns a valid record or raises `ValidationError` with a
-message written for a person; the interface's only job is to display it. Writes
-go to a temp file and get renamed over the target, so an interrupted save leaves
-the previous file intact rather than a truncated one. Rows that fail to parse are
-skipped on load instead of taking the whole file down.
+**Nothing is silently truncated.** The bar chart shows the largest bills that
+fit; when there are more, the heading says "top 11 of 14" rather than letting a
+partial view pass for the whole picture.
 
-## Tests
+## History
 
-The data layer is covered directly. The interface is driven headlessly through
-its own hit registry — the same path a real click takes — across add, edit,
-rename, duplicate-replace, delete, search, sort, scrolling, both dropdowns, the
-confirm modal, empty and overspent states, and both themes.
+**v1** ([tag](https://github.com/Robinson-erc/FinanceChart/releases/tag/v1.0)) was
+a Python desktop app with a hand-painted Tkinter interface — every frame
+composited with Pillow onto a single canvas, because ttk can't do frosted panels
+or condensed display type. It still works: `cd desktop && python main.py`. It's
+kept because the visual language of the web app came directly from it, and
+`palette_check.py` is still the tool that validates the colours.
 
-That suite earned its keep: it caught a regression where search stopped matching
-categories, because the category had become a coloured dot rather than a table
-column and the filter only looked at rendered columns.
+**v2** is this: same design, real accounts, a database, and a URL I can send to
+someone.
 
 ## Known limitations
 
-- Monthly recurring amounts only. No one-off transactions, no history, no
+- Monthly recurring amounts only — no one-off transactions, no history, no
   forecasting beyond the next due date.
 - Single currency, formatted as USD.
-- The window is sized for a desktop display and looks cramped below about
-  1180×812.
-- Font paths in `theme.py` point at Ubuntu's variable fonts and fall back to
-  DejaVu. On another distro you may want to change those.
+- A household's combined view is per-person: you switch between budgets rather
+  than seeing one merged total.
+- Not independently security-audited. The privacy model is enforced in the
+  database and I've documented exactly how, but this is a personal project, not
+  a regulated financial product.
