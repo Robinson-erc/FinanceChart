@@ -536,8 +536,11 @@ function renderConnections() {
     const status = document.createElement("span");
     status.className = `tag ${connection.status === "accepted" ? "is-good" : "is-warning"}`;
     status.textContent = connection.status;
-    head.append(document.createElement("div")).className = "spacer";
-    head.append(status);
+    // append() returns undefined, so the node has to be built before it is
+    // added — chaining a property onto the return value throws.
+    const spacer = document.createElement("div");
+    spacer.className = "spacer";
+    head.append(spacer, status);
     card.append(head);
 
     if (connection.status === "pending" && !connection.outgoing) {
@@ -825,8 +828,24 @@ async function start() {
 
   renderEditorFields();
   resetEditor();
-  await loadConnections();
-  await loadLedgers();
+
+  // Load the budget first, and never let the people panel stop it. These are
+  // independent parts of the screen, and a fault in one used to abort startup
+  // for the other — a broken connection card meant your own bills and income
+  // silently never loaded.
+  await guard("your budget", loadLedgers);
+  await guard("your people", loadConnections);
+}
+
+/** Run a section's loader, reporting a failure instead of aborting startup. */
+async function guard(what, load) {
+  try {
+    await load();
+  } catch (error) {
+    console.error(`failed to load ${what}:`, error);
+    toast("Something went wrong", `Could not load ${what}. ${error.message}`,
+          "critical");
+  }
 }
 
 function boot() {
