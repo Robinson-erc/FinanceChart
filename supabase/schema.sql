@@ -1,17 +1,28 @@
 -- FinanceChart — database schema
 --
 -- Run this once in the Supabase SQL editor (Dashboard → SQL Editor → New query).
--- It is idempotent: re-running it is safe.
+-- It is idempotent: re-running it is safe, including after a partial failure.
 --
 -- The privacy guarantees this app makes are enforced here, in row-level
 -- security policies, not in the browser. The frontend is public code served
 -- from GitHub Pages and cannot be trusted to keep anything secret. Every rule
 -- below is applied by Postgres against the caller's authenticated user id.
+--
+-- Ordering matters and is deliberate: every table exists before any policy is
+-- written, because Postgres resolves the tables a policy expression names at
+-- the moment the policy is created. Policies on `profiles` refer to
+-- `connections`, so the tables are all created up front.
+--
+--   1. tables
+--   2. functions the policies depend on
+--   3. row-level security policies
+--   4. triggers
+--   5. admin export and lookup functions
 
 create extension if not exists "pgcrypto";
 
 
--- ---------------------------------------------------------------- profiles
+-- ============================================================ 1. tables
 
 -- One row per account. `analytics_key` is a pseudonym: it lets the admin
 -- export group rows by household without the export carrying a real user id,
@@ -23,62 +34,6 @@ create table if not exists public.profiles (
   analytics_key uuid not null default gen_random_uuid(),
   created_at    timestamptz not null default now()
 );
-
-alter table public.profiles enable row level security;
-
-drop policy if exists "read own profile" on public.profiles;
-create policy "read own profile" on public.profiles
-  for select using (id = auth.uid());
-
-drop policy if exists "read connected profiles" on public.profiles;
-create policy "read connected profiles" on public.profiles
-  for select using (
-    exists (
-      select 1 from public.connections c
-      where c.status = 'accepted'
-        and ((c.requester_id = profiles.id and c.addressee_id = auth.uid())
-          or (c.addressee_id = profiles.id and c.requester_id = auth.uid()))
-    )
-  );
-
--- A pending invitation has to be able to name the person who sent it.
-drop policy if exists "read pending counterpart profiles" on public.profiles;
-create policy "read pending counterpart profiles" on public.profiles
-  for select using (
-    exists (
-      select 1 from public.connections c
-      where c.status = 'pending'
-        and ((c.requester_id = profiles.id and c.addressee_id = auth.uid())
-          or (c.addressee_id = profiles.id and c.requester_id = auth.uid()))
-    )
-  );
-
-drop policy if exists "update own profile" on public.profiles;
-create policy "update own profile" on public.profiles
-  for update using (id = auth.uid()) with check (id = auth.uid());
-
--- Give every new account a profile automatically.
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.profiles (id, display_name)
-  values (new.id, coalesce(new.raw_user_meta_data ->> 'display_name', ''))
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
-
-
--- ------------------------------------------------------------- connections
 
 -- A link between two accounts. Sharing is opt-in and one-directional per side:
 -- accepting a connection does not reveal your finances, it only lets you
@@ -96,48 +51,6 @@ create table if not exists public.connections (
   constraint no_self_link check (requester_id <> addressee_id),
   constraint one_link_per_pair unique (requester_id, addressee_id)
 );
-
-alter table public.connections enable row level security;
-
-drop policy if exists "read own connections" on public.connections;
-create policy "read own connections" on public.connections
-  for select using (requester_id = auth.uid() or addressee_id = auth.uid());
-
-drop policy if exists "send own invitations" on public.connections;
-create policy "send own invitations" on public.connections
-  for insert with check (requester_id = auth.uid());
-
-drop policy if exists "update own connections" on public.connections;
-create policy "update own connections" on public.connections
-  for update using (requester_id = auth.uid() or addressee_id = auth.uid())
-  with check (requester_id = auth.uid() or addressee_id = auth.uid());
-
-drop policy if exists "delete own connections" on public.connections;
-create policy "delete own connections" on public.connections
-  for delete using (requester_id = auth.uid() or addressee_id = auth.uid());
-
-
--- Does `owner` currently share their finances with the calling user?
-create or replace function public.shares_with_me(owner uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1 from public.connections c
-    where c.status = 'accepted'
-      and (
-        (c.requester_id = owner and c.addressee_id = auth.uid() and c.requester_shares)
-        or
-        (c.addressee_id = owner and c.requester_id = auth.uid() and c.addressee_shares)
-      )
-  );
-$$;
-
-
--- -------------------------------------------------------- bills and income
 
 create table if not exists public.bills (
   id         uuid primary key default gen_random_uuid(),
@@ -162,12 +75,102 @@ create table if not exists public.income (
 
 create index if not exists bills_user_idx on public.bills (user_id);
 create index if not exists income_user_idx on public.income (user_id);
+create index if not exists connections_requester_idx on public.connections (requester_id);
+create index if not exists connections_addressee_idx on public.connections (addressee_id);
 
-alter table public.bills enable row level security;
-alter table public.income enable row level security;
+alter table public.profiles    enable row level security;
+alter table public.connections enable row level security;
+alter table public.bills       enable row level security;
+alter table public.income      enable row level security;
 
+
+-- ========================================================= 2. functions
+
+-- Does `owner` currently share their finances with the calling user?
+--
+-- SECURITY DEFINER so it can look at the connection row without the caller
+-- needing to read it. It returns only a boolean about the caller, so it
+-- cannot be used to enumerate anyone else's relationships.
+create or replace function public.shares_with_me(owner uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.connections c
+    where c.status = 'accepted'
+      and (
+        (c.requester_id = owner and c.addressee_id = auth.uid() and c.requester_shares)
+        or
+        (c.addressee_id = owner and c.requester_id = auth.uid() and c.addressee_shares)
+      )
+  );
+$$;
+
+-- Is the caller connected to `other` at all? Used so a profile name can be
+-- shown on an invitation, without exposing the wider user list.
+create or replace function public.is_linked_to_me(other uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.connections c
+    where (c.requester_id = other and c.addressee_id = auth.uid())
+       or (c.addressee_id = other and c.requester_id = auth.uid())
+  );
+$$;
+
+
+-- ========================================================== 3. policies
+
+-- ---- profiles ----
+-- Your own row, plus the name of anyone you are linked to (so invitations and
+-- the sharing list can say who they are from). Nothing else.
+
+drop policy if exists "read own profile" on public.profiles;
+create policy "read own profile" on public.profiles
+  for select using (id = auth.uid());
+
+drop policy if exists "read linked profiles" on public.profiles;
+create policy "read linked profiles" on public.profiles
+  for select using (public.is_linked_to_me(id));
+
+-- Superseded by "read linked profiles"; dropped so re-running upgrades cleanly.
+drop policy if exists "read connected profiles" on public.profiles;
+drop policy if exists "read pending counterpart profiles" on public.profiles;
+
+drop policy if exists "update own profile" on public.profiles;
+create policy "update own profile" on public.profiles
+  for update using (id = auth.uid()) with check (id = auth.uid());
+
+-- ---- connections ----
+
+drop policy if exists "read own connections" on public.connections;
+create policy "read own connections" on public.connections
+  for select using (requester_id = auth.uid() or addressee_id = auth.uid());
+
+drop policy if exists "send own invitations" on public.connections;
+create policy "send own invitations" on public.connections
+  for insert with check (requester_id = auth.uid());
+
+drop policy if exists "update own connections" on public.connections;
+create policy "update own connections" on public.connections
+  for update using (requester_id = auth.uid() or addressee_id = auth.uid())
+  with check (requester_id = auth.uid() or addressee_id = auth.uid());
+
+drop policy if exists "delete own connections" on public.connections;
+create policy "delete own connections" on public.connections
+  for delete using (requester_id = auth.uid() or addressee_id = auth.uid());
+
+-- ---- bills and income ----
 -- Read your own rows, or those of someone who has chosen to share with you.
 -- Writes are always restricted to your own rows: sharing is read-only.
+
 drop policy if exists "read own or shared bills" on public.bills;
 create policy "read own or shared bills" on public.bills
   for select using (user_id = auth.uid() or public.shares_with_me(user_id));
@@ -201,6 +204,34 @@ create policy "delete own income" on public.income
   for delete using (user_id = auth.uid());
 
 
+-- ========================================================== 4. triggers
+
+-- Give every new account a profile automatically.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, display_name)
+  values (new.id, coalesce(new.raw_user_meta_data ->> 'display_name', ''))
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- Anyone who signed up before this ran still needs a profile.
+insert into public.profiles (id, display_name)
+select id, coalesce(raw_user_meta_data ->> 'display_name', '')
+from auth.users
+on conflict (id) do nothing;
+
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
 begin
@@ -218,7 +249,7 @@ create trigger income_touch before update on public.income
   for each row execute function public.touch_updated_at();
 
 
--- ------------------------------------------------------------ admin export
+-- ====================================== 5. admin export and lookup
 
 -- The app promises that exported data is anonymised: amounts and categories
 -- only, never names, emails, or the free-text description of a bill (which is
@@ -230,10 +261,10 @@ create trigger income_touch before update on public.income
 
 create or replace function public.export_bills()
 returns table (
-  household   uuid,
-  category    text,
-  amount      numeric,
-  due_day     smallint,
+  household     uuid,
+  category      text,
+  amount        numeric,
+  due_day       smallint,
   created_month date
 )
 language plpgsql
@@ -286,14 +317,6 @@ begin
 end;
 $$;
 
-revoke all on function public.export_bills() from public, anon;
-revoke all on function public.export_income() from public, anon;
-grant execute on function public.export_bills() to authenticated;
-grant execute on function public.export_income() to authenticated;
-
-
--- --------------------------------------------------------- finding people
-
 -- Invitations are by email, but the email column on auth.users must not be
 -- readable by everyone — that would turn the app into an address book. This
 -- resolves one address at a time and returns only an id.
@@ -316,5 +339,13 @@ begin
 end;
 $$;
 
-revoke all on function public.find_user_by_email(text) from public, anon;
+revoke all on function public.export_bills()             from public, anon;
+revoke all on function public.export_income()            from public, anon;
+revoke all on function public.find_user_by_email(text)   from public, anon;
+grant execute on function public.export_bills()           to authenticated;
+grant execute on function public.export_income()          to authenticated;
 grant execute on function public.find_user_by_email(text) to authenticated;
+
+-- PostgREST caches the schema; nudge it so the new tables and functions are
+-- visible to the API immediately rather than after its next reload.
+notify pgrst, 'reload schema';
