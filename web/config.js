@@ -10,8 +10,8 @@
  *
  * Find these under: Supabase Dashboard → Project Settings → API
  */
-export const SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
-export const SUPABASE_ANON_KEY = "YOUR-ANON-PUBLIC-KEY";
+export const SUPABASE_URL = "https://lbrudglqapguvzihtncf.supabase.co";
+export const SUPABASE_ANON_KEY = "sb_publishable_7oC4oxifui5dhvT3qfN4fg_vmmx5CU9";
 
 export const isConfigured = () =>
   !SUPABASE_URL.includes("YOUR-PROJECT-REF") &&
