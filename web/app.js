@@ -286,6 +286,9 @@ function resetEditor() {
   for (const field of SPEC[state.kind].fields) {
     $(`f-${field.key}`).value = field.default ?? "";
   }
+  // Values alone are not enough: the frequency drives which schedule fields
+  // apply, so clearing back to Monthly has to hide the ones that no longer do.
+  applyFieldVisibility();
   $("record-error").textContent = "";
   $("editor-title").textContent = SPEC[state.kind].addLabel;
   $("save-btn").textContent = SPEC[state.kind].addLabel;
