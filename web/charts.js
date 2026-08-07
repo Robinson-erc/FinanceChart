@@ -10,7 +10,7 @@
  * reliably tell apart.
  */
 
-import { byCategory, money } from "./data.js";
+import { byCategory, money, monthlyEquivalent } from "./data.js";
 
 const MAX_BARS = 11;
 const MAX_SLOTS = 7;
@@ -63,10 +63,13 @@ export function renderBars(host, bills) {
     return 0;
   }
 
+  // Bars compare what each bill costs per month, so a yearly premium sits
+  // beside a monthly one honestly instead of dwarfing it twelvefold.
   const shown = [...bills]
-    .sort((a, b) => b.amount - a.amount)
+    .map((bill) => ({ ...bill, monthly: monthlyEquivalent(bill) }))
+    .sort((a, b) => b.monthly - a.monthly)
     .slice(0, MAX_BARS);
-  const largest = Number(shown[0].amount);
+  const largest = shown[0].monthly;
   const height = shown.length * BAR_PITCH;
 
   const svg = svgEl("svg", {
@@ -84,7 +87,7 @@ export function renderBars(host, bills) {
 
   shown.forEach((bill, index) => {
     const y = index * BAR_PITCH;
-    const share = Number(bill.amount) / largest;
+    const share = bill.monthly / largest;
     const width = Math.max(4, span * share);
     // Step a single hue by the value's share of the largest, easing the low
     // end so small bars stay clear of the surface.
@@ -108,7 +111,7 @@ export function renderBars(host, bills) {
       x: gutter + width + 12, y: y + BAR_HEIGHT / 2 + 1,
       "dominant-baseline": "middle", class: "bar-value",
     });
-    value.textContent = money(Number(bill.amount));
+    value.textContent = money(bill.monthly);
     svg.append(value);
   });
 

@@ -107,6 +107,26 @@ begin
   end if;
 end $$;
 
+-- Bills carry a frequency for the same reason income does: a yearly premium
+-- entered as a flat amount would read as that much every month. Monthly bills
+-- use due_day; everything on a longer or shorter cycle counts from anchor_date.
+alter table public.bills
+  add column if not exists frequency text not null default 'monthly',
+  add column if not exists anchor_date date;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'bills_frequency_check') then
+    alter table public.bills add constraint bills_frequency_check
+      check (frequency in ('monthly', 'weekly', 'biweekly',
+                           'quarterly', 'semiannual', 'annual'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'bills_schedule_check') then
+    alter table public.bills add constraint bills_schedule_check
+      check (frequency = 'monthly' or anchor_date is not null);
+  end if;
+end $$;
+
 create index if not exists bills_user_idx on public.bills (user_id);
 create index if not exists income_user_idx on public.income (user_id);
 create index if not exists connections_requester_idx on public.connections (requester_id);

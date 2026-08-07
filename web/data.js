@@ -86,14 +86,34 @@ export function daysUntil(day, today = new Date()) {
 
 /* -------------------------------------------------------- pay schedules */
 
-export const FREQUENCIES = [
-  { key: "monthly",     label: "Monthly",           perYear: 12 },
-  { key: "semimonthly", label: "Twice a month",     perYear: 24 },
-  { key: "biweekly",    label: "Every 2 weeks",     perYear: 26 },
-  { key: "weekly",      label: "Weekly",            perYear: 52 },
+// Two menus, one mechanism. Pay arrives on cycles measured in weeks; bills
+// more often land on cycles measured in months. `every` says which unit the
+// cycle steps in, so one date routine serves both.
+export const INCOME_FREQUENCIES = [
+  { key: "monthly",     label: "Monthly",       perYear: 12, every: null },
+  { key: "semimonthly", label: "Twice a month", perYear: 24, every: null },
+  { key: "biweekly",    label: "Every 2 weeks", perYear: 26, every: { days: 14 } },
+  { key: "weekly",      label: "Weekly",        perYear: 52, every: { days: 7 } },
 ];
 
-const PER_YEAR = Object.fromEntries(FREQUENCIES.map((f) => [f.key, f.perYear]));
+export const BILL_FREQUENCIES = [
+  { key: "monthly",    label: "Monthly",       perYear: 12, every: null },
+  { key: "weekly",     label: "Weekly",        perYear: 52, every: { days: 7 } },
+  { key: "biweekly",   label: "Every 2 weeks", perYear: 26, every: { days: 14 } },
+  { key: "quarterly",  label: "Every 3 months", perYear: 4, every: { months: 3 } },
+  { key: "semiannual", label: "Every 6 months", perYear: 2, every: { months: 6 } },
+  { key: "annual",     label: "Yearly",         perYear: 1, every: { months: 12 } },
+];
+
+/** Kept for compatibility with anything still importing the old name. */
+export const FREQUENCIES = INCOME_FREQUENCIES;
+
+const ALL = [...INCOME_FREQUENCIES, ...BILL_FREQUENCIES];
+const SPECS = Object.fromEntries(ALL.map((f) => [f.key, f]));
+const PER_YEAR = Object.fromEntries(ALL.map((f) => [f.key, f.perYear]));
+
+/** Does this frequency need an anchor date, or a day of the month? */
+export const needsAnchor = (frequency) => Boolean(SPECS[frequency]?.every);
 
 /** A "YYYY-MM-DD" string as a local date, avoiding the UTC off-by-one. */
 export function parseDateOnly(text) {
@@ -122,24 +142,47 @@ export function monthlyEquivalent(row) {
   return (Number(row.amount) * perYear) / 12;
 }
 
-/** The next date this source pays out, whatever its schedule. */
-export function nextPayDate(row, today = new Date()) {
+/**
+ * The next date a record falls due, whatever its schedule.
+ *
+ * Cycle-based rows count forward from their anchor, so the anchor may be a
+ * past date (the last payslip) or a future one (a renewal you already know) —
+ * both land on the same answer.
+ */
+export function nextDate(row, today = new Date()) {
   const start = midnight(today);
+  const spec = SPECS[row.frequency ?? "monthly"];
 
-  if (row.frequency === "biweekly" || row.frequency === "weekly") {
+  if (spec?.every) {
     if (!row.anchor_date) return null;
-    const step = row.frequency === "weekly" ? 7 : 14;
     const anchor = parseDateOnly(row.anchor_date);
     if (anchor >= start) return anchor;
-    const elapsed = Math.round((start - anchor) / 86400000);
-    const cycles = Math.ceil(elapsed / step);
-    return new Date(anchor.getFullYear(), anchor.getMonth(),
-                    anchor.getDate() + cycles * step);
+
+    if (spec.every.days) {
+      const elapsed = Math.round((start - anchor) / 86400000);
+      const cycles = Math.ceil(elapsed / spec.every.days);
+      return new Date(anchor.getFullYear(), anchor.getMonth(),
+                      anchor.getDate() + cycles * spec.every.days);
+    }
+
+    // Month-based cycles step whole months, clamping to the month's last day
+    // so a bill anchored on the 31st still resolves in February.
+    const step = spec.every.months;
+    const monthsApart =
+      (start.getFullYear() - anchor.getFullYear()) * 12 +
+      (start.getMonth() - anchor.getMonth());
+    let cycles = Math.max(0, Math.floor(monthsApart / step));
+    for (let guard = 0; guard < 240; guard += 1) {
+      const target = addMonthsClamped(anchor, cycles * step);
+      if (target >= start) return target;
+      cycles += 1;
+    }
+    return null;
   }
 
   const days = row.frequency === "semimonthly" && row.pay_day_2
     ? [row.pay_day, row.pay_day_2]
-    : [row.pay_day];
+    : [row.pay_day ?? row.due_day];
   const candidates = days
     .filter(Boolean)
     .map((day) => {
@@ -149,16 +192,30 @@ export function nextPayDate(row, today = new Date()) {
   return candidates.sort((a, b) => a - b)[0] ?? null;
 }
 
+function addMonthsClamped(date, months) {
+  const year = date.getFullYear();
+  const month = date.getMonth() + months;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(date.getDate(), lastDay));
+}
+
+/** Kept for compatibility; income used to have its own date routine. */
+export const nextPayDate = nextDate;
+
 /** Plain-English schedule, e.g. "Every 2 weeks · next Thu 20 Aug". */
 export function describeSchedule(row, today = new Date()) {
-  const label = FREQUENCIES.find((f) => f.key === row.frequency)?.label ?? "Monthly";
-  const next = nextPayDate(row, today);
-  if (!next) return label;
-  if (row.frequency === "monthly") return `Monthly · ${ordinal(row.pay_day)}`;
-  if (row.frequency === "semimonthly" && row.pay_day_2) {
+  const frequency = row.frequency ?? "monthly";
+  const label = SPECS[frequency]?.label ?? "Monthly";
+  const day = row.pay_day ?? row.due_day;
+
+  if (frequency === "monthly") return `Monthly · ${ordinal(day)}`;
+  if (frequency === "semimonthly" && row.pay_day_2) {
     const [first, second] = [row.pay_day, row.pay_day_2].sort((a, b) => a - b);
     return `Twice a month · ${ordinal(first)} and ${ordinal(second)}`;
   }
+
+  const next = nextDate(row, today);
+  if (!next) return label;
   const when = next.toLocaleDateString(undefined,
     { weekday: "short", day: "numeric", month: "short" });
   return `${label} · next ${when}`;
@@ -166,23 +223,37 @@ export function describeSchedule(row, today = new Date()) {
 
 export const total = (rows) => rows.reduce((sum, row) => sum + Number(row.amount), 0);
 
-/** Monthly total of income, with each source normalised to its own frequency. */
-export const monthlyIncome = (rows) =>
+/** Monthly total, with every row normalised through its own frequency. */
+export const monthlyTotal = (rows) =>
   rows.reduce((sum, row) => sum + monthlyEquivalent(row), 0);
 
+/** Kept for compatibility; the income-only name predates bills having schedules. */
+export const monthlyIncome = monthlyTotal;
+
+/**
+ * Category totals, in monthly equivalents.
+ *
+ * Raw amounts would be misleading here: a yearly insurance premium alongside
+ * a monthly phone bill would dominate the split by a factor of twelve without
+ * actually costing that much each month.
+ */
 export function byCategory(bills) {
   const totals = new Map();
   for (const bill of bills) {
-    totals.set(bill.category, (totals.get(bill.category) ?? 0) + Number(bill.amount));
+    totals.set(bill.category,
+               (totals.get(bill.category) ?? 0) + monthlyEquivalent(bill));
   }
   return [...totals.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-export function nextDue(rows, dayField) {
-  if (!rows.length) return null;
-  return [...rows].sort(
-    (a, b) => daysUntil(a[dayField]) - daysUntil(b[dayField]) || b.amount - a.amount
-  )[0];
+/** Whichever row falls due soonest, across whatever schedules they keep. */
+export function nextDue(rows) {
+  const dated = rows
+    .map((row) => ({ row, at: nextDate(row) }))
+    .filter((entry) => entry.at);
+  if (!dated.length) return null;
+  dated.sort((a, b) => a.at - b.at || monthlyEquivalent(b.row) - monthlyEquivalent(a.row));
+  return dated[0];
 }
 
 /* ----------------------------------------------------------------- auth */
@@ -239,6 +310,17 @@ export async function updateDisplayName(name) {
 
 const TABLES = { bills: "bills", income: "income" };
 
+/** Validate and normalise the anchor date a cycle-based schedule counts from. */
+function parseAnchor(value, prompt) {
+  const anchor = String(value ?? "").trim();
+  if (!anchor) throw new ValidationError(prompt);
+  const parsed = parseDateOnly(anchor);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ValidationError(`"${anchor}" is not a date I can read.`);
+  }
+  return toDateOnly(parsed);
+}
+
 /** Turn the income form's values into a row, per the chosen frequency. */
 function buildIncome(values) {
   const frequency = values.frequency || "monthly";
@@ -264,16 +346,33 @@ function buildIncome(values) {
       throw new ValidationError("The two pay days need to be different.");
     }
   } else {
-    // Cycle-based pay is counted from one known date, so it is required.
-    const anchor = String(values.anchor_date ?? "").trim();
-    if (!anchor) {
-      throw new ValidationError("Pick the date you were last paid.");
-    }
-    const parsed = parseDateOnly(anchor);
-    if (Number.isNaN(parsed.getTime())) {
-      throw new ValidationError(`"${anchor}" is not a date I can read.`);
-    }
-    row.anchor_date = toDateOnly(parsed);
+    row.anchor_date = parseAnchor(values.anchor_date,
+                                  "Pick the date you were last paid.");
+  }
+  return row;
+}
+
+/** Turn the bill form's values into a row, per the chosen frequency. */
+function buildBill(values) {
+  const frequency = values.frequency || "monthly";
+  if (!PER_YEAR[frequency]) {
+    throw new ValidationError(`${frequency} is not a billing cycle I know.`);
+  }
+
+  const row = {
+    name: parseName(values.name, "bill"),
+    amount: parseAmount(values.amount),
+    category: values.category || "Other",
+    frequency,
+    due_day: 1,
+    anchor_date: null,
+  };
+
+  if (frequency === "monthly") {
+    row.due_day = parseDay(values.due_day, "Due day");
+  } else {
+    row.anchor_date = parseAnchor(values.anchor_date,
+                                  "Pick the date this is next due.");
   }
   return row;
 }
@@ -291,15 +390,7 @@ export async function listRecords(kind, userId) {
 
 export async function saveRecord(kind, values, id = null) {
   const { data: auth } = await supabase.auth.getUser();
-  const payload =
-    kind === "bills"
-      ? {
-          name: parseName(values.name, "bill"),
-          amount: parseAmount(values.amount),
-          category: values.category || "Other",
-          due_day: parseDay(values.due_day, "Due day"),
-        }
-      : buildIncome(values);
+  const payload = kind === "bills" ? buildBill(values) : buildIncome(values);
 
   const query = id
     ? supabase.from(TABLES[kind]).update(payload).eq("id", id)

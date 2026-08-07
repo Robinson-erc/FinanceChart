@@ -23,7 +23,7 @@ const state = {
   kind: "bills",             // which ledger tab
   view: "budget",
   editingId: null,
-  sort: { bills: "due_day", income: "schedule" },
+  sort: { bills: "schedule", income: "schedule" },
   reverse: false,
   search: "",
   bills: [],
@@ -37,19 +37,29 @@ const SPEC = {
     noun: "bill",
     addLabel: "Add a bill",
     dayField: "due_day",
-    defaultSort: "due_day",
+    defaultSort: "schedule",
     columns: [
       { key: "name", label: "Bill", align: "l" },
-      { key: "due_day", label: "Due", align: "c" },
-      { key: "amount", label: "Amount", align: "r" },
+      { key: "schedule", label: "Schedule", align: "l" },
+      { key: "amount", label: "Per month", align: "r" },
     ],
     fields: [
       { key: "name", label: "Name", type: "text" },
       { key: "amount", label: "Amount ($)", type: "text", inputmode: "decimal" },
-      { key: "category", label: "Category", type: "select", options: db.CATEGORIES, default: "Other" },
-      { key: "due_day", label: "Due day", type: "number", default: "1" },
+      { key: "category", label: "Category", type: "select",
+        options: db.CATEGORIES, default: "Other" },
+      {
+        key: "frequency", label: "How often", type: "select",
+        options: db.BILL_FREQUENCIES.map((f) => f.key),
+        optionLabels: db.BILL_FREQUENCIES.map((f) => f.label),
+        default: "monthly",
+      },
+      { key: "due_day", label: "Due day", type: "number", default: "1",
+        showFor: ["monthly"] },
+      { key: "anchor_date", label: "Next due", type: "date",
+        showFor: ["weekly", "biweekly", "quarterly", "semiannual", "annual"] },
     ],
-    searchText: (r) => `${r.name} ${r.category} ${db.ordinal(r.due_day)}`,
+    searchText: (r) => `${r.name} ${r.category} ${db.describeSchedule(r)}`,
   },
   income: {
     noun: "income source",
@@ -255,6 +265,20 @@ function renderEditorFields() {
   applyFieldVisibility();
 }
 
+// Where a frequency's monthly figure will not match what someone expects to
+// see, say why next to the field rather than leaving the number looking wrong.
+const SCHEDULE_NOTES = {
+  biweekly: "Every 2 weeks is 26 payments a year, so the monthly figure is a " +
+            "little over twice the amount.",
+  weekly: "Weekly is 52 payments a year, averaged across the months.",
+  quarterly: "Spread across the months — a quarterly amount counts as a third " +
+             "of it each month.",
+  semiannual: "Spread across the months — a half-yearly amount counts as a " +
+              "sixth of it each month.",
+  annual: "Spread across the months — a yearly amount counts as a twelfth of " +
+          "it each month.",
+};
+
 /** Show only the schedule fields that the chosen frequency actually uses. */
 function applyFieldVisibility() {
   const spec = SPEC[state.kind];
@@ -266,11 +290,7 @@ function applyFieldVisibility() {
   }
   const note = $("schedule-note");
   if (note) {
-    note.textContent = frequency === "biweekly"
-      ? "Paid every 2 weeks — that's 26 payments a year, so the monthly figure is a little over twice your cheque."
-      : frequency === "weekly"
-      ? "Paid weekly — 52 payments a year, averaged across the months."
-      : "";
+    note.textContent = SCHEDULE_NOTES[frequency] ?? "";
     note.hidden = !note.textContent;
   }
 }
@@ -317,12 +337,12 @@ function visibleRows() {
 
   const key = state.sort[state.kind];
   return [...rows].sort((a, b) => {
-    if (state.kind === "income" && key === "amount") {
+    if (key === "amount") {
       const cmp = db.monthlyEquivalent(a) - db.monthlyEquivalent(b);
       return state.reverse ? -cmp : cmp;
     }
     if (key === "schedule") {
-      const cmp = (db.nextPayDate(a) ?? 0) - (db.nextPayDate(b) ?? 0);
+      const cmp = (db.nextDate(a) ?? 0) - (db.nextDate(b) ?? 0);
       return state.reverse ? -cmp : cmp;
     }
     const [x, y] = [a[key], b[key]];
@@ -340,8 +360,7 @@ function renderLedger() {
   $("ledger-title").textContent = state.kind === "bills" ? "Bills" : "Income";
   $("search").placeholder = `Search ${state.kind}…`;
   $("ledger-sub").textContent = records().length
-    ? `${db.money(state.kind === "income"
-        ? db.monthlyIncome(records()) : db.total(records()))} per month`
+    ? `${db.money(db.monthlyTotal(records()))} per month`
     : `No ${state.kind} yet`;
 
   // Header
@@ -390,9 +409,7 @@ function renderLedger() {
         td.className = "num";
         // Income is shown per month so the column is comparable down the page;
         // the raw packet is in the schedule cell beside it.
-        td.textContent = state.kind === "income"
-          ? db.money(db.monthlyEquivalent(record))
-          : db.money(Number(record.amount));
+        td.textContent = db.money(db.monthlyEquivalent(record));
       } else if (column.key === "schedule") {
         td.className = "muted";
         td.textContent = db.describeSchedule(record);
@@ -417,8 +434,8 @@ function renderLedger() {
 }
 
 function renderHero() {
-  const incoming = db.monthlyIncome(state.income);
-  const outgoing = db.total(state.bills);
+  const incoming = db.monthlyTotal(state.income);
+  const outgoing = db.monthlyTotal(state.bills);
   const spare = incoming - outgoing;
 
   const hero = $("hero-value");
@@ -440,23 +457,21 @@ function renderHero() {
     ? `${state.bills.length} bill${state.bills.length === 1 ? "" : "s"}`
     : "none yet";
 
-  const upcomingBill = db.nextDue(state.bills, "due_day");
-  const upcomingPay = [...state.income]
-    .map((row) => ({ row, at: db.nextPayDate(row) }))
-    .filter((entry) => entry.at)
-    .sort((a, b) => a.at - b.at)[0];
+  const upcomingBill = db.nextDue(state.bills);
+  const upcomingPay = db.nextDue(state.income);
   const when = (days) => (days === 0 ? "Today" : days === 1 ? "Tomorrow" : `In ${days} days`);
 
+  const daysAway = (entry) =>
+    Math.round((entry.at - new Date().setHours(0, 0, 0, 0)) / 86400000);
+
   if (upcomingBill) {
-    const days = db.daysUntil(upcomingBill.due_day);
     $("chip-next-label").textContent = "Next bill due";
-    $("chip-next").textContent = when(days);
-    $("chip-next-note").textContent = `${upcomingBill.name} · ${db.ordinal(upcomingBill.due_day)}`;
+    $("chip-next").textContent = when(daysAway(upcomingBill));
+    $("chip-next-note").textContent =
+      `${upcomingBill.row.name} · ${db.describeSchedule(upcomingBill.row)}`;
   } else if (upcomingPay) {
-    const days = Math.round(
-      (upcomingPay.at - new Date().setHours(0, 0, 0, 0)) / 86400000);
     $("chip-next-label").textContent = "Next payday";
-    $("chip-next").textContent = when(days);
+    $("chip-next").textContent = when(daysAway(upcomingPay));
     $("chip-next-note").textContent =
       `${upcomingPay.row.name} · ${db.describeSchedule(upcomingPay.row)}`;
   } else {
