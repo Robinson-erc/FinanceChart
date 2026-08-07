@@ -248,6 +248,25 @@ export async function inviteByEmail(email, relationship) {
     throw new ValidationError("That is your own account.");
   }
 
+  // The unique constraint only catches a repeat in the same direction. Two
+  // people who invite each other before either accepts would otherwise end up
+  // with two rows for one relationship, so check both directions first.
+  const { data: existing } = await supabase
+    .from("connections")
+    .select("id, status, requester_id")
+    .or(`and(requester_id.eq.${auth.user.id},addressee_id.eq.${otherId}),` +
+        `and(requester_id.eq.${otherId},addressee_id.eq.${auth.user.id})`)
+    .maybeSingle();
+
+  if (existing) {
+    if (existing.status === "pending" && existing.requester_id === otherId) {
+      throw new ValidationError(
+        "They have already invited you — accept their invitation instead."
+      );
+    }
+    throw new ValidationError("You already have a connection with that person.");
+  }
+
   const { error } = await supabase.from("connections").insert({
     requester_id: auth.user.id,
     addressee_id: otherId,
