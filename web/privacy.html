@@ -69,7 +69,7 @@
   <h2>The reporting export</h2>
   <p>The project owner can export data to build charts in Power BI — averages,
     category breakdowns, how a typical month is distributed. <strong>That export
-    is anonymised.</strong> It contains:</p>
+    is pseudonymised.</strong> It contains:</p>
   <ul>
     <li>An opaque household key — a random identifier with no link back to a name
       or an email, so rows from the same household can be grouped without
@@ -83,6 +83,12 @@
   <p>The export is used for aggregate reporting — averages, distributions and
     charts. It is not used to look at any individual's finances, and it is not
     shared or sold to anyone.</p>
+  <p><strong>Why "pseudonymised" and not "anonymised".</strong> The household
+    key is random, but it is the <em>same</em> key for you every time — that is
+    what makes grouping possible. Anyone holding the database could therefore
+    match a key back to an account. Genuinely anonymous data cannot be traced
+    back by anyone, and this can, so it would be wrong to call it that. It is
+    still personal data and it is still treated as such.</p>
 
   <h2>Where it lives</h2>
   <p>The database is a Supabase project (hosted Postgres) in a single region.
@@ -92,9 +98,11 @@
 
   <h2>Deleting your data</h2>
   <p>Delete individual bills and income from the app at any time; removal is
-    immediate. To delete your entire account and everything attached to it, ask
-    the project owner — account rows cascade, so removing the account removes all
-    of its records.</p>
+    immediate.</p>
+  <p>To delete everything, use <strong>Delete my account</strong> on the Account
+    page. It removes your account, every bill and income record, and every
+    connection, straight away — no request to anyone and no waiting period. It
+    cannot be undone, so download your data first if you want to keep a copy.</p>
 
   <h2>Being straight about the limits</h2>
   <p>This is a personal project built for a household, not a regulated financial

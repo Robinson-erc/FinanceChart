@@ -100,13 +100,29 @@ check("B sees nothing of A's", status == 200 and rows == [], f"{status} {rows}")
 status, rows = call("GET", f"/rest/v1/profiles?id=eq.{a_id}&select=id", b_token)
 check("B cannot read A's profile", status == 200 and rows == [], f"{status} {rows}")
 
+print("\n== invitations do not reveal who holds an account ==")
+status, _ = call("POST", "/rest/v1/rpc/find_user_by_email", a_token,
+                 {"lookup_email": B_EMAIL})
+check("the old email-lookup oracle is gone", status >= 400, f"HTTP {status}")
+
+status, outcome = call("POST", "/rest/v1/rpc/invite_by_email", a_token,
+                       {"lookup_email": "no-such-person-8f21c4@example.com"})
+check("an unregistered address answers exactly like a real one",
+      status == 200 and outcome == "sent", f"{status} {outcome}")
+
 print("\n== connect them ==")
-status, conn = call("POST", "/rest/v1/connections", a_token,
-                    {"requester_id": a_id, "addressee_id": b_id,
-                     "requester_relationship": "Partner"},
-                    prefer="return=representation")
-check("A can invite B", status in (200, 201), f"{status} {conn}")
-conn_id = conn[0]["id"] if isinstance(conn, list) and conn else None
+status, outcome = call("POST", "/rest/v1/rpc/invite_by_email", a_token,
+                       {"lookup_email": B_EMAIL, "label": "Partner"})
+check("A can invite B", status == 200 and outcome == "sent", f"{status} {outcome}")
+
+_, rows = call("GET", "/rest/v1/connections?select=id,requester_relationship", a_token)
+conn_id = rows[0]["id"] if isinstance(rows, list) and rows else None
+check("the invitation stored A's own label",
+      bool(rows) and rows[0]["requester_relationship"] == "Partner", f"{rows}")
+
+status, outcome = call("POST", "/rest/v1/rpc/invite_by_email", a_token,
+                       {"lookup_email": B_EMAIL})
+check("a repeat invitation is refused", outcome == "exists", f"{status} {outcome}")
 
 status, rows = call("GET", "/rest/v1/bills?select=*", b_token)
 check("pending connection shares nothing", status == 200 and rows == [], f"{status} {rows}")
@@ -215,13 +231,28 @@ print("\n== admin export is closed to non-admins ==")
 status, payload = call("POST", "/rest/v1/rpc/export_bills", b_token, {})
 check("non-admin export refused", status >= 400, f"HTTP {status} {str(payload)[:80]}")
 
-print("\n== email lookup needs a session ==")
-status, _ = call("POST", "/rest/v1/rpc/find_user_by_email", None,
+print("\n== inviting needs a session ==")
+status, _ = call("POST", "/rest/v1/rpc/invite_by_email", None,
                  {"lookup_email": A_EMAIL})
-check("signed-out lookup refused", status >= 400, f"HTTP {status}")
-status, found = call("POST", "/rest/v1/rpc/find_user_by_email", b_token,
-                     {"lookup_email": A_EMAIL})
-check("signed-in lookup resolves an id", status == 200 and found == a_id, f"{status} {found}")
+check("signed-out invitation refused", status >= 400, f"HTTP {status}")
+
+print("\n== an account can erase itself ==")
+status, _ = call("POST", "/rest/v1/rpc/delete_my_account", b_token, {})
+check("B can delete its own account", status in (200, 204), f"HTTP {status}")
+
+status, payload = call("POST", "/auth/v1/token?grant_type=password",
+                       body={"email": B_EMAIL, "password": PASSWORD})
+check("B can no longer sign in", status >= 400, f"HTTP {status} {str(payload)[:60]}")
+
+_, rows = call("GET", "/rest/v1/connections?select=id", a_token)
+check("the connection cascaded away with B", rows == [], f"{rows}")
+
+_, rows = call("GET", "/rest/v1/bills?select=id", a_token)
+check("A's own records are untouched", isinstance(rows, list) and len(rows) == 1, f"{rows}")
 
 print("\n" + ("ALL PASS" if not failures else f"FAILURES ({len(failures)}): {failures}"))
-print(f"\ncleanup: delete users {A_EMAIL} and {B_EMAIL} in Authentication -> Users")
+
+# Deleting the accounts is itself the last assertion, so the suite leaves no
+# residue behind — earlier versions asked you to go and tidy up by hand.
+call("POST", "/rest/v1/rpc/delete_my_account", a_token, {})
+print(f"\ncleanup: removed {A_EMAIL} and {B_EMAIL}")

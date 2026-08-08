@@ -17,7 +17,7 @@
 --   2. functions the policies depend on
 --   3. row-level security policies
 --   4. triggers
---   5. admin export and lookup functions
+--   5. admin export, invitations, and account deletion
 
 create extension if not exists "pgcrypto";
 
@@ -164,15 +164,32 @@ begin
   end if;
 end $$;
 
+-- Invitation attempts, kept only so they can be rate-limited.
+--
+-- Inviting someone requires resolving their email to an account, and anything
+-- that answers "does this address have an account?" is an oracle worth
+-- throttling. Rows are written by the invite function alone: no role is granted
+-- anything here, and row-level security is on with no policies, so only the
+-- SECURITY DEFINER function can see or write it.
+create table if not exists public.invite_attempts (
+  id         bigint generated always as identity primary key,
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists invite_attempts_user_idx
+  on public.invite_attempts (user_id, created_at desc);
+
 create index if not exists bills_user_idx on public.bills (user_id);
 create index if not exists income_user_idx on public.income (user_id);
 create index if not exists connections_requester_idx on public.connections (requester_id);
 create index if not exists connections_addressee_idx on public.connections (addressee_id);
 
-alter table public.profiles    enable row level security;
-alter table public.connections enable row level security;
-alter table public.bills       enable row level security;
-alter table public.income      enable row level security;
+alter table public.profiles        enable row level security;
+alter table public.connections     enable row level security;
+alter table public.bills           enable row level security;
+alter table public.income          enable row level security;
+alter table public.invite_attempts enable row level security;
 
 -- Table privileges are a separate layer from row-level security, and both are
 -- required. GRANT decides whether a role may touch the table at all; RLS then
@@ -430,11 +447,18 @@ create trigger income_touch before update on public.income
   for each row execute function public.touch_updated_at();
 
 
--- ====================================== 5. admin export and lookup
+-- ============ 5. admin export, invitations, account deletion
 
--- The app promises that exported data is anonymised: amounts and categories
--- only, never names, emails, or the free-text description of a bill (which is
--- often identifying — "Aspen estate mortgage" names a household).
+-- The export carries amounts and categories only — never names, emails, or the
+-- free-text description of a bill (which is often identifying on its own:
+-- "Aspen estate mortgage" names a household).
+--
+-- It is *pseudonymised*, not anonymised, and the distinction is legal as much
+-- as technical. `analytics_key` is stable per household, so rows can be linked
+-- back to a person by anyone holding the profiles table. Under GDPR that makes
+-- the export personal data still, with all the duties that follow. Genuine
+-- anonymisation would mean no stable key at all, and the grouping this export
+-- exists to provide would go with it.
 --
 -- These are SECURITY DEFINER so they can read across users, and they check the
 -- admin flag themselves. Without that check they would be a way for any signed
@@ -499,33 +523,116 @@ end;
 $$;
 
 -- Invitations are by email, but the email column on auth.users must not be
--- readable by everyone — that would turn the app into an address book. This
--- resolves one address at a time and returns only an id.
-create or replace function public.find_user_by_email(lookup_email text)
-returns uuid
+-- readable by everyone — that would turn the app into an address book.
+--
+-- The earlier version of this resolved an address to a user id and handed it
+-- back, which made it an enumeration oracle: any signed-in account could ask
+-- "is alice@example.com registered here?" as fast as it liked and be answered
+-- truthfully. Knowing someone holds an account with a budgeting app is not
+-- nothing, and the answer was free and unlimited.
+--
+-- So the lookup no longer exists on its own. It happens inside the invitation,
+-- the id never leaves the database, and the answer is identical whether or not
+-- the address is registered — the same shape as a password-reset form that
+-- says "if that address has an account, we've emailed it".
+--
+-- 'self', 'exists' and 'incoming' do confirm an account exists, and that is
+-- deliberate: each of them can only be reached for your own address or for
+-- someone already in your connection list, so they tell the caller nothing
+-- they could not already see.
+drop function if exists public.find_user_by_email(text);
+
+create or replace function public.invite_by_email(lookup_email text,
+                                                  label text default null)
+returns text
 language plpgsql
-stable
+volatile
 security definer
 set search_path = public
 as $$
 declare
-  found uuid;
+  me       uuid := auth.uid();
+  target   uuid;
+  attempts integer;
+  existing record;
 begin
-  if auth.uid() is null then
+  if me is null then
     raise exception 'not authorised';
   end if;
-  select id into found from auth.users
+
+  -- Throttle before looking anything up, and count every attempt rather than
+  -- only the ones that resolve. Counting hits alone would leave probing for
+  -- addresses that are *not* registered completely unlimited, which is exactly
+  -- the direction an enumeration sweep goes.
+  insert into public.invite_attempts (user_id) values (me);
+  select count(*) into attempts
+    from public.invite_attempts
+   where user_id = me and created_at > now() - interval '1 hour';
+  if attempts > 15 then
+    raise exception 'too many invitations in the last hour — try again later';
+  end if;
+
+  select id into target from auth.users
    where lower(email) = lower(trim(lookup_email)) limit 1;
-  return found;
+
+  if target = me then
+    return 'self';
+  end if;
+
+  if target is not null then
+    select c.id, c.status, c.requester_id into existing
+      from public.connections c
+     where (c.requester_id = me and c.addressee_id = target)
+        or (c.requester_id = target and c.addressee_id = me)
+     limit 1;
+
+    if existing.id is not null then
+      if existing.status = 'pending' and existing.requester_id = target then
+        return 'incoming';
+      end if;
+      return 'exists';
+    end if;
+
+    insert into public.connections (requester_id, addressee_id,
+                                    requester_relationship)
+    values (me, target, coalesce(nullif(trim(label), ''), 'Partner'));
+  end if;
+
+  return 'sent';
 end;
 $$;
 
-revoke all on function public.export_bills()             from public, anon;
-revoke all on function public.export_income()            from public, anon;
-revoke all on function public.find_user_by_email(text)   from public, anon;
-grant execute on function public.export_bills()           to authenticated;
-grant execute on function public.export_income()          to authenticated;
-grant execute on function public.find_user_by_email(text) to authenticated;
+-- Erase your own account and everything attached to it.
+--
+-- Deleting the auth.users row is the whole operation: profiles, bills, income,
+-- connections and invite attempts all reference it with `on delete cascade`,
+-- so they go with it. A user cannot reach auth.users directly, hence the
+-- SECURITY DEFINER wrapper — which is careful to delete only auth.uid().
+create or replace function public.delete_my_account()
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  me uuid := auth.uid();
+begin
+  if me is null then
+    raise exception 'not authorised';
+  end if;
+  delete from auth.users where id = me;
+end;
+$$;
+
+revoke all on function public.export_bills()           from public, anon;
+revoke all on function public.export_income()          from public, anon;
+revoke all on function public.invite_by_email(text, text) from public, anon;
+revoke all on function public.delete_my_account()      from public, anon;
+grant execute on function public.export_bills()             to authenticated;
+grant execute on function public.export_income()            to authenticated;
+grant execute on function public.invite_by_email(text, text) to authenticated;
+grant execute on function public.delete_my_account()        to authenticated;
 
 -- PostgREST caches the schema; nudge it so the new tables and functions are
 -- visible to the API immediately rather than after its next reload.

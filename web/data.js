@@ -475,55 +475,42 @@ export async function setRelationship(connection, label) {
   if (error) throw new ValidationError(error.message);
 }
 
+/**
+ * Invite someone by email.
+ *
+ * The whole operation happens in one database function, deliberately. Looking
+ * an address up from here and then inserting would mean the browser learning
+ * whether that address has an account — an enumeration oracle any signed-in
+ * user could sweep an address list through. The server does the lookup
+ * internally and never returns the id.
+ *
+ * A registered address and an unregistered one both answer "sent", which means
+ * this cannot tell the inviter that nobody by that address signed up. That is
+ * a real cost in usability, paid on purpose: the alternative leaks whether a
+ * given person keeps a budget here, to anyone who cares to ask.
+ */
 export async function inviteByEmail(email, relationship) {
-  const { data: auth } = await supabase.auth.getUser();
-  const { data: otherId, error: lookupError } = await supabase.rpc(
-    "find_user_by_email",
-    { lookup_email: email }
-  );
-  if (lookupError) throw new ValidationError(lookupError.message);
-  if (!otherId) {
-    throw new ValidationError(
-      "No account uses that email yet. Ask them to sign up first."
-    );
-  }
-  if (otherId === auth.user.id) {
+  const address = String(email ?? "").trim();
+  if (!address) throw new ValidationError("Enter their email address.");
+
+  const { data: outcome, error } = await supabase.rpc("invite_by_email", {
+    lookup_email: address,
+    label: parseRelationship(relationship),
+  });
+  if (error) throw new ValidationError(error.message);
+
+  if (outcome === "self") {
     throw new ValidationError("That is your own account.");
   }
-
-  // The unique constraint only catches a repeat in the same direction. Two
-  // people who invite each other before either accepts would otherwise end up
-  // with two rows for one relationship, so check both directions first.
-  const { data: existing } = await supabase
-    .from("connections")
-    .select("id, status, requester_id")
-    .or(`and(requester_id.eq.${auth.user.id},addressee_id.eq.${otherId}),` +
-        `and(requester_id.eq.${otherId},addressee_id.eq.${auth.user.id})`)
-    .maybeSingle();
-
-  if (existing) {
-    if (existing.status === "pending" && existing.requester_id === otherId) {
-      throw new ValidationError(
-        "They have already invited you — accept their invitation instead."
-      );
-    }
-    throw new ValidationError("You already have a connection with that person.");
-  }
-
-  // Only the inviter's own label is set here. The other person chooses their
-  // word for you once they see the invitation.
-  const { error } = await supabase.from("connections").insert({
-    requester_id: auth.user.id,
-    addressee_id: otherId,
-    requester_relationship: parseRelationship(relationship) ?? "Partner",
-  });
-  if (error) {
+  if (outcome === "incoming") {
     throw new ValidationError(
-      error.code === "23505"
-        ? "You already have a connection with that person."
-        : error.message
+      "They have already invited you — accept their invitation instead."
     );
   }
+  if (outcome === "exists") {
+    throw new ValidationError("You already have a connection with that person.");
+  }
+  return outcome;
 }
 
 export async function respondToInvite(id, accept) {
@@ -554,7 +541,7 @@ export async function removeConnection(id) {
 /**
  * Your own data, in full.
  *
- * This is not the anonymised reporting export — it is your records, so it
+ * This is not the pseudonymised reporting export — it is your records, so it
  * includes the descriptions you typed. Everyone gets this; the privacy note
  * promises you can always take your data with you.
  */
@@ -568,14 +555,19 @@ export async function exportMyData() {
 }
 
 /**
- * Anonymised export for reporting.
+ * Pseudonymised export for reporting.
  *
  * The server returns amounts, categories and dates keyed by an opaque
  * household id — never a name, an email, or the free-text description of a
  * bill, which is often identifying on its own. The admin check happens in
  * Postgres; calling this without the flag raises.
+ *
+ * Pseudonymised, not anonymised: the household key is stable, so whoever holds
+ * the profiles table can link a row back to a person. GDPR treats that as
+ * personal data, so the word matters and the app should not claim the stronger
+ * one.
  */
-export async function exportAnonymised() {
+export async function exportPseudonymised() {
   const [bills, income] = await Promise.all([
     supabase.rpc("export_bills"),
     supabase.rpc("export_income"),
@@ -583,6 +575,28 @@ export async function exportAnonymised() {
   if (bills.error) throw new ValidationError(bills.error.message);
   if (income.error) throw new ValidationError(income.error.message);
   return { bills: bills.data ?? [], income: income.data ?? [] };
+}
+
+/**
+ * Erase this account and everything attached to it. Irreversible.
+ *
+ * The cascade from auth.users does the work, so there is nothing to tidy up
+ * here afterwards beyond ending the session — which has to happen locally too,
+ * since the token outlives the row it refers to.
+ */
+export async function deleteMyAccount() {
+  const { error } = await supabase.rpc("delete_my_account");
+  if (error) throw new ValidationError(error.message);
+
+  // The row backing this session no longer exists, so asking the server to
+  // revoke it can legitimately fail. The account is already gone either way;
+  // what matters here is that the local token is dropped, so a failure to
+  // reach the server must not leave the browser looking signed in.
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+  }
 }
 
 export function toCsv(rows, columns) {

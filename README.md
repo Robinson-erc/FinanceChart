@@ -27,10 +27,10 @@ detail without either of us being obliged to. That's the whole product.
 - **The month at a glance.** What's left over, a meter showing how much of your
   income the bills consume, bills ranked by size, and where the money goes by
   category.
-- **Anonymised reporting export** for Power BI — amounts and categories only,
+- **Pseudonymised reporting export** for Power BI — amounts and categories only,
   never names or descriptions.
 - **Your own data, any time.** Every user can download a full copy of their
-  records.
+  records, and delete their account outright from the Account page.
 - Light and dark, both deliberately designed rather than one inverted.
 
 | Sign in | Light mode |
@@ -59,6 +59,16 @@ policy you can read in full. The short version:
   admin flag itself, and returns a pseudonymous household key, category, amount
   and date. Names, emails and bill descriptions never leave the database — a
   description like "Aspen estate mortgage" identifies a household on its own.
+  It is *pseudonymised*, not anonymised: the household key is stable, so a
+  holder of the profiles table could re-link it. GDPR treats that as personal
+  data and the app says so rather than claiming the stronger word.
+- Invitations resolve an email to an account **inside** the database, and the
+  answer is the same whether or not the address is registered. An earlier
+  version handed the id back to the browser, which made it an unlimited
+  enumeration oracle for "does this person have an account here?". Attempts are
+  also rate-limited, counting misses as well as hits.
+- Any account can erase itself — `delete_my_account()` removes the `auth.users`
+  row and everything cascades from it.
 
 The full plain-English version is at [`web/privacy.html`](web/privacy.html), and
 it's linked from the sign-in screen.

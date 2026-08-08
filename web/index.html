@@ -265,6 +265,19 @@
         <p class="error" id="mine-error" role="alert"></p>
 
         <hr class="divider">
+
+        <h3 style="margin:0 0 6px;font-size:15px">Delete this account</h3>
+        <p class="small muted" style="margin:0 0 14px">
+          Removes your account, every bill and income record, and every
+          connection you have. Immediate and permanent — download your data
+          first if you want to keep it.
+        </p>
+        <div class="row">
+          <button class="btn btn-danger" id="delete-account">Delete my account</button>
+        </div>
+        <p class="error" id="delete-account-error" role="alert"></p>
+
+        <hr class="divider">
         <p class="notice">
           Your records are visible only to you, and to anyone you have
           explicitly chosen to share with. <a href="privacy.html">Read the full
@@ -274,7 +287,7 @@
 
       <div class="panel pane hidden" id="admin-pane">
         <div class="pane-head"><div><h2>Reporting export</h2>
-          <div class="sub">Anonymised · for Power BI</div></div>
+          <div class="sub">Pseudonymised · for Power BI</div></div>
           <span class="tag is-accent">Admin</span></div>
 
         <p class="notice" style="margin-bottom:16px">
@@ -283,6 +296,13 @@
           description like “Aspen estate mortgage” identifies a household on its
           own. Rows are grouped by an opaque household key so you can still
           compare across accounts.
+        </p>
+
+        <p class="notice" style="margin-bottom:16px">
+          <strong>Pseudonymised, not anonymised.</strong> The household key is
+          stable, so anyone holding the profiles table could link these rows back
+          to a person. Treat these files as personal data: they carry the same
+          obligations the database does.
         </p>
 
         <div class="row">

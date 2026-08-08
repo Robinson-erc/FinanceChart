@@ -134,6 +134,52 @@ function confirmAction(message, confirmLabel = "Delete") {
   });
 }
 
+/**
+ * A confirmation that cannot be cleared by reflex.
+ *
+ * Deleting an account is irreversible and there is nothing to restore from, so
+ * the ordinary two-button dialog is too easy to click through on the way to
+ * somewhere else. Typing the word is the friction that makes it a decision.
+ */
+function confirmTyped(message, phrase, confirmLabel = "Delete") {
+  return new Promise((resolve) => {
+    const host = $("modal-host");
+    host.innerHTML = `
+      <div class="scrim">
+        <div class="panel modal" role="dialog" aria-modal="true">
+          <h3>This cannot be undone</h3>
+          <p></p>
+          <label class="field">
+            <span></span>
+            <input type="text" autocomplete="off" spellcheck="false" data-phrase>
+          </label>
+          <div class="row" style="justify-content:flex-end;margin-top:14px">
+            <button class="btn" data-no>Cancel</button>
+            <button class="btn btn-danger" data-yes disabled></button>
+          </div>
+        </div>
+      </div>`;
+    host.querySelector("p").textContent = message;
+    host.querySelector("label span").textContent = `Type ${phrase} to confirm`;
+
+    const yes = host.querySelector("[data-yes]");
+    const input = host.querySelector("[data-phrase]");
+    yes.textContent = confirmLabel;
+
+    const finish = (value) => { host.innerHTML = ""; resolve(value); };
+    input.oninput = () => { yes.disabled = input.value.trim() !== phrase; };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") { event.preventDefault(); if (!yes.disabled) finish(true); }
+    };
+    yes.onclick = () => { if (!yes.disabled) finish(true); };
+    host.querySelector("[data-no]").onclick = () => finish(false);
+    host.querySelector(".scrim").onclick = (event) => {
+      if (event.target === host.querySelector(".scrim")) finish(false);
+    };
+    input.focus();
+  });
+}
+
 function setTheme(mode) {
   document.documentElement.dataset.theme = mode;
   $("theme-toggle").textContent = mode === "dark" ? "☀" : "☾";
@@ -807,7 +853,11 @@ function wireApp() {
       await db.inviteByEmail($("invite-email").value, $("invite-relationship").value);
       $("invite-email").value = "";
       $("invite-relationship").value = "";
-      toast("Invitation sent", "They will see it next time they sign in.", "good");
+      // Hedged on purpose. The server answers the same way for an address with
+      // no account, so promising it arrived would sometimes be a lie.
+      toast("Invitation sent",
+        "If that address has an account, they will see it next time they sign in.",
+        "good");
       await loadConnections();
     } catch (error) {
       $("invite-error").textContent = error.message;
@@ -832,6 +882,22 @@ function wireApp() {
     location.reload();
   };
 
+  $("delete-account").onclick = async () => {
+    $("delete-account-error").textContent = "";
+    const confirmed = await confirmTyped(
+      "This deletes your account, every bill and income record you have entered, " +
+      "and every connection. Anyone sharing with you loses the link. There is no " +
+      "way to undo it and no backup to restore from.",
+      "DELETE", "Delete my account");
+    if (!confirmed) return;
+    try {
+      await db.deleteMyAccount();
+      location.reload();
+    } catch (error) {
+      $("delete-account-error").textContent = error.message;
+    }
+  };
+
   $("export-bills").onclick = () => runExport("bills");
   $("export-income").onclick = () => runExport("income");
 
@@ -854,7 +920,7 @@ function wireApp() {
 async function runExport(which) {
   $("export-error").textContent = "";
   try {
-    const data = await db.exportAnonymised();
+    const data = await db.exportPseudonymised();
     const stamp = new Date().toISOString().slice(0, 10);
     if (which === "bills") {
       db.downloadCsv(`financechart-bills-${stamp}.csv`,
@@ -863,7 +929,7 @@ async function runExport(which) {
       db.downloadCsv(`financechart-income-${stamp}.csv`,
         db.toCsv(data.income, ["household", "amount", "pay_day", "created_month"]));
     }
-    toast("Export ready", "Anonymised — no names or emails included.", "good");
+    toast("Export ready", "No names or emails — grouped by household key.", "good");
   } catch (error) {
     $("export-error").textContent = error.message;
   }
