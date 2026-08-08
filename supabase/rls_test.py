@@ -103,7 +103,7 @@ check("B cannot read A's profile", status == 200 and rows == [], f"{status} {row
 print("\n== connect them ==")
 status, conn = call("POST", "/rest/v1/connections", a_token,
                     {"requester_id": a_id, "addressee_id": b_id,
-                     "relationship": "Partner"},
+                     "requester_relationship": "Partner"},
                     prefer="return=representation")
 check("A can invite B", status in (200, 201), f"{status} {conn}")
 conn_id = conn[0]["id"] if isinstance(conn, list) and conn else None
@@ -152,6 +152,32 @@ check("B cannot force A to share",
       f"requester_shares={flags}")
 _, rows = call("GET", "/rest/v1/bills?select=name", b_token)
 check("forced sharing leaks nothing", rows == [], f"{rows}")
+
+print("\n== each side owns its own relationship label ==")
+status, _ = call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", b_token,
+                 {"addressee_relationship": "Boyfriend"})
+check("B can set its own label", status in (200, 204), f"HTTP {status}")
+
+_, labels = call(
+    "GET",
+    f"/rest/v1/connections?id=eq.{conn_id}"
+    "&select=requester_relationship,addressee_relationship",
+    a_token)
+check("the two labels differ independently",
+      isinstance(labels, list) and labels
+      and labels[0]["requester_relationship"] == "Partner"
+      and labels[0]["addressee_relationship"] == "Boyfriend",
+      f"{labels}")
+
+call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", b_token,
+     {"requester_relationship": "Whatever B wants"})
+_, labels = call("GET",
+                 f"/rest/v1/connections?id=eq.{conn_id}&select=requester_relationship",
+                 a_token)
+check("B cannot rewrite A's label for B",
+      isinstance(labels, list) and labels
+      and labels[0]["requester_relationship"] == "Partner",
+      f"requester_relationship={labels}")
 
 print("\n== B cannot answer an invitation on A's behalf, or re-answer ==")
 status, _ = call("PATCH", f"/rest/v1/connections?id=eq.{conn_id}", a_token,

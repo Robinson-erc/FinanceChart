@@ -22,12 +22,21 @@ export const CATEGORIES = [
   "Debt", "Groceries", "Transportation", "Healthcare", "Other",
 ];
 
-/** Suggested relationship labels. Free text is allowed — this is only a list. */
+/**
+ * Suggested relationship labels. Free text is allowed — this is only a list.
+ *
+ * Each person picks their own label for the other, so these describe the other
+ * person from your side: you choose "Girlfriend" for her, she chooses
+ * "Boyfriend" for you. Neither choice constrains the other.
+ */
 export const RELATIONSHIPS = [
   "Partner", "Spouse", "Wife", "Husband", "Fiancée", "Fiancé",
   "Girlfriend", "Boyfriend", "Parent", "Child", "Sibling",
   "Housemate", "Roommate", "Friend", "Loved one", "Other",
 ];
+
+/** Shown where someone has not yet chosen a word for the other person. */
+export const DEFAULT_RELATIONSHIP = "Connection";
 
 export class ValidationError extends Error {}
 
@@ -48,6 +57,13 @@ export function parseAmount(value) {
   }
   if (amount <= 0) throw new ValidationError("Amount must be greater than zero.");
   return Math.round(amount * 100) / 100;
+}
+
+/** A relationship label. Blank is allowed and means "not chosen yet". */
+export function parseRelationship(value) {
+  const label = String(value ?? "").trim();
+  if (label.length > 40) throw new ValidationError("That label is too long.");
+  return label || null;
 }
 
 export function parseDay(value, label) {
@@ -438,8 +454,25 @@ export async function listConnections() {
       // What I share with them, and what they share with me.
       iShare: outgoing ? row.requester_shares : row.addressee_shares,
       theyShare: outgoing ? row.addressee_shares : row.requester_shares,
+      // What I call them. `theirLabel` is what they call me, which is theirs to
+      // choose and may legitimately differ — she is my girlfriend, I am her
+      // boyfriend. Only `myLabel` is editable from this side.
+      myLabel: outgoing ? row.requester_relationship : row.addressee_relationship,
+      theirLabel: outgoing ? row.addressee_relationship : row.requester_relationship,
     };
   });
+}
+
+/** Set my own word for the other person. Theirs for me is untouched. */
+export async function setRelationship(connection, label) {
+  const column = connection.outgoing
+    ? "requester_relationship"
+    : "addressee_relationship";
+  const { error } = await supabase
+    .from("connections")
+    .update({ [column]: parseRelationship(label) })
+    .eq("id", connection.id);
+  if (error) throw new ValidationError(error.message);
 }
 
 export async function inviteByEmail(email, relationship) {
@@ -477,10 +510,12 @@ export async function inviteByEmail(email, relationship) {
     throw new ValidationError("You already have a connection with that person.");
   }
 
+  // Only the inviter's own label is set here. The other person chooses their
+  // word for you once they see the invitation.
   const { error } = await supabase.from("connections").insert({
     requester_id: auth.user.id,
     addressee_id: otherId,
-    relationship: relationship || "Partner",
+    requester_relationship: parseRelationship(relationship) ?? "Partner",
   });
   if (error) {
     throw new ValidationError(

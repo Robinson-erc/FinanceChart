@@ -96,10 +96,13 @@ PEOPLE = {
     },
 }
 
-# (from, to, relationship, from_shares, to_shares)
+# (from, to, from_label, to_label, from_shares, to_shares)
+#
+# Each side labels the other independently, so the pair need not agree and
+# usually should not. Ana calls Carla her mother; Carla calls Ana her daughter.
 LINKS = [
-    ("ana", "ben", "Partner", True, True),
-    ("ana", "carla", "Mother", False, True),
+    ("ana", "ben", "Partner", "Partner", True, True),
+    ("ana", "carla", "Mother", "Daughter", False, True),
 ]
 
 
@@ -200,26 +203,27 @@ def main():
               f"{len(person['income'])} income")
 
     print("\nLinking them up…")
-    for source, target, relationship, from_shares, to_shares in LINKS:
+    for source, target, from_label, to_label, from_shares, to_shares in LINKS:
         a, b = people[source], people[target]
         status, created = call("POST", "/rest/v1/connections", a["token"], {
             "requester_id": a["id"], "addressee_id": b["id"],
-            "relationship": relationship,
+            "requester_relationship": from_label,
         }, prefer="return=representation")
         if status >= 300:
             print(f"  ! {source} -> {target}: {created}")
             continue
         link_id = created[0]["id"]
-        # The invitee accepts, then each side sets only its own flag — which is
-        # the only way the database will allow it.
+        # The invitee accepts, then each side sets only its own flag and its own
+        # label — which is the only way the database will allow it.
         call("PATCH", f"/rest/v1/connections?id=eq.{link_id}", b["token"],
-             {"status": "accepted"})
+             {"status": "accepted", "addressee_relationship": to_label})
         call("PATCH", f"/rest/v1/connections?id=eq.{link_id}", a["token"],
              {"requester_shares": from_shares})
         call("PATCH", f"/rest/v1/connections?id=eq.{link_id}", b["token"],
              {"addressee_shares": to_shares})
         arrow = "<->" if from_shares and to_shares else "->" if to_shares else "<-"
-        print(f"  {a['name']} {arrow} {b['name']}  ({relationship})")
+        print(f"  {a['name']} {arrow} {b['name']}  "
+              f"({a['name']}: {from_label} / {b['name']}: {to_label})")
 
     print("\nDone. Sign in with any of these:\n")
     for person in people.values():

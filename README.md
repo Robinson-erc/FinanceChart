@@ -16,10 +16,14 @@ detail without either of us being obliged to. That's the whole product.
 - **Real accounts.** Email and password, one budget per person.
 - **Private by default.** Your figures are yours. Nobody sees them until you
   connect with a person *and* switch sharing on — two deliberate steps.
-- **Opt-in, one-directional sharing.** You label the relationship yourself
-  (partner, wife, husband, fiancé, housemate, friend, whatever fits). Each side
-  controls its own switch independently, sharing is read-only, and either of you
-  can turn it off at any moment.
+- **Opt-in, one-directional sharing.** Each side controls its own switch
+  independently, sharing is read-only, and either of you can turn it off at any
+  moment.
+- **Each of you labels the other.** You pick the word for them (partner, wife,
+  husband, fiancé, housemate, friend, whatever fits) and they pick the word for
+  you. Relationships are rarely symmetric in language — one person's girlfriend
+  is the other's boyfriend — so neither label is imposed on the other, and the
+  database will not let one side write the other's.
 - **The month at a glance.** What's left over, a meter showing how much of your
   income the bills consume, bills ranked by size, and where the money goes by
   category.

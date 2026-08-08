@@ -509,6 +509,73 @@ function renderBudget() {
 
 /* --------------------------------------------------------------- people */
 
+/**
+ * The word you use for this person, editable in place.
+ *
+ * Only your own label is shown. The word they use for you is theirs to pick
+ * and may rightly differ — she is my girlfriend, I am her boyfriend — so it is
+ * neither displayed here nor writable from this side; the database enforces
+ * the second part regardless of what this code does.
+ */
+function relationshipTag(connection) {
+  const tag = document.createElement("button");
+  tag.type = "button";
+  tag.className = "tag tag-edit";
+
+  const paint = () => {
+    tag.textContent = connection.myLabel || "Add label";
+    tag.classList.toggle("is-unset", !connection.myLabel);
+    tag.title = `What you call ${connection.otherName}. Only you see this.`;
+  };
+  paint();
+
+  tag.onclick = () => {
+    const input = document.createElement("input");
+    input.className = "tag-input";
+    input.value = connection.myLabel ?? "";
+    input.setAttribute("list", "relationships");
+    input.maxLength = 40;
+    input.placeholder = "Partner";
+    input.setAttribute("aria-label", `What you call ${connection.otherName}`);
+
+    // blur fires again as the input is swapped out, so commit only once.
+    let settled = false;
+    const finish = async (save) => {
+      if (settled) return;
+      settled = true;
+      const next = input.value.trim();
+      input.replaceWith(tag);
+      if (!save || next === (connection.myLabel ?? "")) return;
+
+      const previous = connection.myLabel;
+      connection.myLabel = next || null;
+      paint();
+      try {
+        await db.setRelationship(connection, next);
+        toast("Relationship updated",
+          next ? `You call ${connection.otherName} “${next}”.`
+               : `Label cleared for ${connection.otherName}.`);
+      } catch (error) {
+        connection.myLabel = previous;
+        paint();
+        toast("Could not save that", error.message, "critical");
+      }
+    };
+
+    input.onblur = () => finish(true);
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") { event.preventDefault(); finish(true); }
+      if (event.key === "Escape") { event.preventDefault(); finish(false); }
+    };
+
+    tag.replaceWith(input);
+    input.focus();
+    input.select();
+  };
+
+  return tag;
+}
+
 function renderConnections() {
   const host = $("connections");
   host.replaceChildren();
@@ -528,10 +595,7 @@ function renderConnections() {
     head.className = "row";
     const name = document.createElement("strong");
     name.textContent = connection.otherName;
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = connection.relationship;
-    head.append(name, tag);
+    head.append(name, relationshipTag(connection));
 
     const status = document.createElement("span");
     status.className = `tag ${connection.status === "accepted" ? "is-good" : "is-warning"}`;
@@ -628,7 +692,9 @@ function renderViewingPicker() {
   select.replaceChildren();
   select.append(new Option("My budget", state.profile.id));
   for (const connection of shared) {
-    select.append(new Option(`${connection.otherName} (${connection.relationship})`, connection.otherId));
+    select.append(new Option(
+      `${connection.otherName} (${connection.myLabel || db.DEFAULT_RELATIONSHIP})`,
+      connection.otherId));
   }
   select.value = state.viewingId ?? state.profile.id;
 }

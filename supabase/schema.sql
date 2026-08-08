@@ -38,19 +38,56 @@ create table if not exists public.profiles (
 -- A link between two accounts. Sharing is opt-in and one-directional per side:
 -- accepting a connection does not reveal your finances, it only lets you
 -- choose to. Each side controls its own flag.
+--
+-- The relationship label is per-side for the same reason. A relationship is
+-- rarely symmetric in words: one person's girlfriend is the other's boyfriend,
+-- a parent's child calls them a parent. One shared string forced both people to
+-- read whichever label the inviter happened to pick. So each column holds what
+-- *that* person calls the other, and each person may only write their own.
 create table if not exists public.connections (
-  id               uuid primary key default gen_random_uuid(),
-  requester_id     uuid not null references auth.users (id) on delete cascade,
-  addressee_id     uuid not null references auth.users (id) on delete cascade,
-  relationship     text not null default 'Partner',
-  status           text not null default 'pending'
-                     check (status in ('pending', 'accepted', 'declined')),
-  requester_shares boolean not null default false,
-  addressee_shares boolean not null default false,
-  created_at       timestamptz not null default now(),
+  id                     uuid primary key default gen_random_uuid(),
+  requester_id           uuid not null references auth.users (id) on delete cascade,
+  addressee_id           uuid not null references auth.users (id) on delete cascade,
+  requester_relationship text,
+  addressee_relationship text,
+  status                 text not null default 'pending'
+                           check (status in ('pending', 'accepted', 'declined')),
+  requester_shares       boolean not null default false,
+  addressee_shares       boolean not null default false,
+  created_at             timestamptz not null default now(),
   constraint no_self_link check (requester_id <> addressee_id),
   constraint one_link_per_pair unique (requester_id, addressee_id)
 );
+
+-- Projects created before the label was split carry a single `relationship`
+-- column. Move it to the requester's side — that is who wrote it — and leave
+-- the addressee's own label empty for them to fill in.
+--
+-- Deliberately not auto-reciprocated: turning "Girlfriend" into "Boyfriend"
+-- means inferring someone's gender from a word they did not choose, which is
+-- the bug this migration exists to fix.
+alter table public.connections
+  add column if not exists requester_relationship text,
+  add column if not exists addressee_relationship text;
+
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public'
+                and table_name = 'connections'
+                and column_name = 'relationship') then
+    update public.connections
+       set requester_relationship = coalesce(requester_relationship, relationship);
+    alter table public.connections drop column relationship;
+  end if;
+
+  if not exists (select 1 from pg_constraint
+                  where conname = 'connections_label_length_check') then
+    alter table public.connections add constraint connections_label_length_check
+      check (length(coalesce(requester_relationship, '')) <= 40
+         and length(coalesce(addressee_relationship, '')) <= 40);
+  end if;
+end $$;
 
 create table if not exists public.bills (
   id         uuid primary key default gen_random_uuid(),
@@ -318,6 +355,19 @@ begin
   if new.addressee_shares is distinct from old.addressee_shares
      and me is distinct from old.addressee_id then
     raise exception 'only that person may change their own sharing';
+  end if;
+
+  -- Each side owns the word it uses for the other. Without this the addressee
+  -- could rewrite how the requester's own list describes them, which is the
+  -- same class of hole as writing someone else's sharing flag.
+  if new.requester_relationship is distinct from old.requester_relationship
+     and me is distinct from old.requester_id then
+    raise exception 'only that person may change their own label for the other';
+  end if;
+
+  if new.addressee_relationship is distinct from old.addressee_relationship
+     and me is distinct from old.addressee_id then
+    raise exception 'only that person may change their own label for the other';
   end if;
 
   if new.status is distinct from old.status then
