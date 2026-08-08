@@ -93,7 +93,19 @@
       <select id="viewing" style="min-width:190px"></select>
     </label>
 
-    <button class="icon-btn" id="theme-toggle" title="Switch theme" aria-label="Switch theme">☾</button>
+    <!-- Both icons are always present and CSS shows one, so the glyph can
+         never drift out of step with the theme. -->
+    <button class="icon-btn" id="theme-toggle" title="Switch theme" aria-label="Switch theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" width="17" height="17" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4.2"/>
+        <path d="M12 2.4v2.1M12 19.5v2.1M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.4 12h2.1M19.5 12h2.1M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5"/>
+      </svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" width="17" height="17" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a7.2 7.2 0 1 0 10.8 10.8z"/>
+      </svg>
+    </button>
   </header>
 
   <!-- ============================ BUDGET ============================= -->

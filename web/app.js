@@ -182,7 +182,11 @@ function confirmTyped(message, phrase, confirmLabel = "Delete") {
 
 function setTheme(mode) {
   document.documentElement.dataset.theme = mode;
-  $("theme-toggle").textContent = mode === "dark" ? "☀" : "☾";
+  // Which icon shows is CSS's job; the label has to be set here because a
+  // screen reader needs the action named, not the picture described.
+  const next = mode === "dark" ? "light" : "dark";
+  $("theme-toggle").setAttribute("aria-label", `Switch to ${next} theme`);
+  $("theme-toggle").title = `Switch to ${next} theme`;
   localStorage.setItem("fc-theme", mode);
 }
 

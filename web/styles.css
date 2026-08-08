@@ -440,6 +440,15 @@ table.ledger td.num { font-family: var(--mono); font-variant-numeric: tabular-nu
   display: grid; place-items: center;
 }
 .icon-btn:hover { background: var(--inset); color: var(--ink); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The button offers the theme you would switch *to*, so dark shows a sun.
+   These were ☀ and ☾ as text: no loaded font carries either, so the fallback
+   rendered the sun as a faint speck a few pixels across. Drawn as SVG they
+   inherit currentColor and match the rest of the interface at any size. */
+.icon-btn .icon-sun { display: none; }
+[data-theme="dark"] .icon-btn .icon-sun { display: block; }
+[data-theme="dark"] .icon-btn .icon-moon { display: none; }
 
 .hero { padding: 24px 26px; margin-bottom: 18px; }
 .hero-grid {
