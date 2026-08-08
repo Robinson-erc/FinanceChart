@@ -458,11 +458,17 @@ table.ledger td.num { font-family: var(--mono); font-variant-numeric: tabular-nu
   background: var(--track);
   overflow: hidden;
 }
+/* Flat, and quiet on purpose.
+   This bar's only job is proportion, and its length already says that. The
+   gradient it used to carry ran purple to cyan across the fill, which encoded
+   nothing — the hue shifted with position, not with any figure — and the glow
+   gave the loudest element on the page a weight its meaning did not earn.
+   The glow is kept on .meter-over below, where it marks a real state rather
+   than decorating a normal one. */
 .meter-fill {
   position: absolute; inset: 0 auto 0 0;
   border-radius: var(--radius-pill);
-  background: linear-gradient(90deg, var(--accent), var(--accent-soft));
-  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--accent);
   transition: width 0.4s ease;
 }
 .meter-over {
